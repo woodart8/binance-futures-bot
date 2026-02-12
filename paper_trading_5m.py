@@ -20,17 +20,24 @@ from datetime import datetime
 import ccxt
 import pandas as pd
 
-from config import SYMBOL, TIMEFRAME
+from config import (
+    FEE_RATE,
+    INITIAL_BALANCE,
+    LEVERAGE,
+    POSITION_SIZE_PERCENT,
+    RSI_ENTRY,
+    RSI_EXIT,
+    RSI_PERIOD,
+    SYMBOL,
+    TIMEFRAME,
+)
 from trade_logger import log_trade
 
 
-RSI_PERIOD = 14
-RSI_OVERSOLD = 30
-RSI_OVERBOUGHT = 60
-INITIAL_BALANCE = 1000.0  # 모의 USDT 시작 잔고
-RISK_PER_TRADE = 0.1  # 잔고의 10% 사용
-FEE_RATE = 0.0004  # 왕복 수수료 0.04% 가정
-LEVERAGE = 5  # 실거래와 동일하게 5배 레버리지 가정
+# config.py 와 동일 파라미터 사용
+RSI_OVERSOLD = RSI_ENTRY
+RSI_OVERBOUGHT = RSI_EXIT
+RISK_PER_TRADE = POSITION_SIZE_PERCENT
 
 
 def log(message: str, level: str = "INFO") -> None:
