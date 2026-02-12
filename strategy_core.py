@@ -1,7 +1,6 @@
 """
 전략 로직 모듈.
 
-현재는 단일 RSI_SWING 롱 전략만 구현한다.
 """
 
 from dataclasses import dataclass
@@ -10,7 +9,7 @@ from typing import Literal
 from config import RSI_ENTRY, RSI_EXIT
 
 
-Signal = Literal["long", "flat", "hold"]
+Signal = Literal["long", "short", "flat", "hold"]
 
 
 @dataclass
@@ -23,13 +22,19 @@ def rsi_swing_signal(rsi_value: float, has_position: bool, params: RsiSwingParam
     """
     RSI_SWING 전략 시그널 생성.
 
-    - 포지션 없음 + RSI <= rsi_entry  -> "long" (진입)
+    - 포지션 없음 + RSI < rsi_entry  -> "long" (진입)
+    - 포지션 없음 + RSI > rsi_exit -> "short" (진입)
     - 포지션 보유 + RSI >= rsi_exit   -> "flat" (청산)
+    - 포지션 보유 + RSI <= rsi_entry -> "flat" (청산)
     - 그 외                             -> "hold"
     """
-    if not has_position and rsi_value <= params.rsi_entry:
+    if not has_position and rsi_value < params.rsi_entry:
         return "long"
+    if not has_position and rsi_value > params.rsi_exit:
+        return "short"
     if has_position and rsi_value >= params.rsi_exit:
+        return "flat"
+    if has_position and rsi_value <= params.rsi_entry:
         return "flat"
     return "hold"
 

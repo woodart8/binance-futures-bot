@@ -5,7 +5,7 @@
 """
 
 SYMBOL = "BTC/USDT"
-TIMEFRAME = "5m"
+TIMEFRAME = "1m"
 
 # 포지션/리스크 관리
 LEVERAGE = 5  # 선물 레버리지
