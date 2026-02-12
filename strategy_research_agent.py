@@ -13,7 +13,7 @@ import csv
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import Dict, List
 
 
 LOG_FILE = Path("trades_log.csv")
@@ -76,6 +76,14 @@ def summarize_trades(trades: List[Trade]) -> None:
     print(f"승률: {win_rate:.2f}%")
     print(f"최대 낙폭(MDD): {max_dd * 100:.2f}%")
     print(f"마지막 잔고: {balances[-1]:.4f} USDT")
+
+    return {
+        "num_trades": len(trades),
+        "total_pnl": total_pnl,
+        "win_rate": win_rate,
+        "max_drawdown_pct": max_dd * 100,
+        "last_balance": balances[-1],
+    }
 
 
 def main() -> None:

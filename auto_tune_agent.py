@@ -25,6 +25,7 @@ from config import RSI_ENTRY, RSI_EXIT, SYMBOL, TIMEFRAME
 from exchange_client import get_public_exchange
 from indicators import calculate_rsi
 from strategy_core import RsiSwingParams, rsi_swing_signal
+from strategy_research_agent import load_trades, summarize_trades
 
 
 CONFIG_PATH = Path(__file__).parent / "config.py"
@@ -147,6 +148,39 @@ def git_commit_and_push(new_exit: int) -> None:
 
 
 def main() -> None:
+    # 1) 실거래 성과 분석
+    trades = load_trades()
+    stats = summarize_trades(trades)
+
+    # 트레이드 기록이 없으면 stats 가 None 이라 튜닝 스킵
+    if not stats:
+        print("[auto-tune] 트레이드 통계가 없어 튜닝을 건너뜁니다.")
+        return
+
+    num_trades = stats["num_trades"]
+    win_rate = stats["win_rate"]
+    max_dd = stats["max_drawdown_pct"]
+
+    print(
+        f"[auto-tune] 최근 실거래 기준: "
+        f"트레이드 수={num_trades}, 승률={win_rate:.2f}%, MDD={max_dd:.2f}%"
+    )
+
+    # 2) 튜닝 수행 여부 조건
+    # - 트레이드가 너무 적으면 (예: 10회 미만) 데이터 부족으로 스킵
+    if num_trades < 10:
+        print("[auto-tune] 트레이드 수가 10회 미만이라 튜닝을 건너뜁니다.")
+        return
+
+    # - 승률이 충분히 높고(MDD도 낮으면) 튜닝 안 해도 됨 (예: 승률>60, MDD<10)
+    if win_rate > 60 and max_dd < 10:
+        print(
+            "[auto-tune] 승률과 MDD가 이미 양호하여 "
+            "이번 사이클에서는 튜닝을 건너뜁니다."
+        )
+        return
+
+    # 3) 조건을 만족하면 백테스트 기반 자동 튜닝 진행
     new_exit = auto_tune_rsi_exit()
     if new_exit is None:
         return
