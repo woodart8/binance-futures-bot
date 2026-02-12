@@ -15,7 +15,7 @@ FEE_RATE = 0.0004  # 왕복 수수료 0.04% 가정
 # RSI_SWING 전략 파라미터
 RSI_PERIOD = 14
 RSI_ENTRY = 30  # RSI <= 30 진입
-RSI_EXIT = 60  # RSI >= 60 청산
+RSI_EXIT = 70  # RSI >= 70 청산
 
 # 모의/백테스트 초기 잔고
 INITIAL_BALANCE = 1000.0
