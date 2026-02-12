@@ -61,8 +61,8 @@ def auto_tune_rsi_exit() -> int | None:
     여러 RSI_EXIT 후보를 백테스트해서,
     현재 값보다 좋은 후보가 있으면 그 값을 반환한다.
     """
-    print("5분봉 OHLCV 로드 중...")
-    df = load_ohlcv(limit=1500)
+    print("1분봉 OHLCV 로드 중...")
+    df = load_ohlcv(limit=300)
 
     # 현재 설정 포함해서 여러 RSI_EXIT 후보 테스트
     exit_candidates: List[int] = sorted({RSI_EXIT, 55, 60, 65, 70})
