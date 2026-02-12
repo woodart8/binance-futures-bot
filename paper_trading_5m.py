@@ -20,9 +20,10 @@ from datetime import datetime
 import ccxt
 import pandas as pd
 
+from config import SYMBOL, TIMEFRAME
+from trade_logger import log_trade
 
-SYMBOL = "BTC/USDT"
-TIMEFRAME = "5m"
+
 RSI_PERIOD = 14
 RSI_OVERSOLD = 30
 RSI_OVERBOUGHT = 60
@@ -114,6 +115,15 @@ def apply_strategy_on_candle(state: PaperState, candle: pd.Series) -> None:
         state.has_position = False
         state.position_size = 0.0
         state.entry_price = 0.0
+        # 모의 트레이드도 실거래와 동일 포맷으로 기록
+        log_trade(
+            side="PAPER_LONG",
+            entry_price=float(candle["open"]),  # 단순히 해당 봉 시가를 진입가로 사용
+            exit_price=price,
+            pnl=net_pnl,
+            balance_after=state.balance,
+            meta={"timeframe": TIMEFRAME, "symbol": SYMBOL, "mode": "paper"},
+        )
         log(
             f"청산: 가격={price:.2f}, RSI={rsi:.2f}, 실현손익={net_pnl:.4f} USDT, "
             f"잔고={state.balance:.4f} USDT"
