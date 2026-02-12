@@ -146,6 +146,9 @@ def git_commit_and_push(new_exit: int) -> None:
     run(["git", "push", "origin", "main"])
     print("[git] push 완료")
 
+def redeploy():
+    subprocess.run(["sudo", "systemctl", "restart", "binance_live_trader.service"])
+    print("서비스가 성공적으로 재시작되었습니다.")
 
 def main() -> None:
     # 1) 실거래 성과 분석
@@ -186,7 +189,7 @@ def main() -> None:
         return
     update_config_rsi_exit(new_exit)
     git_commit_and_push(new_exit)
-
+    redeploy()
 
 if __name__ == "__main__":
     main()
