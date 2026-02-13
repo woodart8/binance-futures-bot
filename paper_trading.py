@@ -58,6 +58,7 @@ from strategy_core import (
     swing_strategy_signal,
     detect_market_regime,
     MarketRegime,
+    calculate_box_range,
 )
 from trade_logger import log_trade
 
@@ -69,6 +70,11 @@ from config import MA_SHORT_PERIOD, MA_LONG_PERIOD
 
 # 체크 주기 (초)
 CHECK_INTERVAL = 30  # 30초마다 체크 (안정적인 모니터링)
+
+# 손절/익절 미청산 사유 로그 주기 (초) - 스팸 방지
+NO_EXIT_REASON_LOG_INTERVAL = 120
+
+_last_no_exit_log_time: float = 0.0
 
 
 def log(message: str, level: str = "INFO") -> None:
@@ -276,6 +282,52 @@ def open_position(
     log(f"{side} 진입 ({reason}): 가격={price:.2f}, 잔고={state.balance:.2f} USDT, PNL={total_pnl:+.2f} USDT, ROE={roe:+.2f}%")
 
 
+def _get_no_scalp_exit_reason(
+    state: PaperState, current_price: float, pnl_pct: float, side: str
+) -> str:
+    """손절/익절/트레일링스톱 미청산 사유를 설명하는 문자열 반환."""
+    reasons = []
+    if side == "LONG":
+        if state.entry_regime == "bullish":
+            reasons.append(f"익절{BULLISH_PROFIT_TARGET}% 미도달 (현재 {pnl_pct:.2f}%)")
+            reasons.append(f"손절{BULLISH_STOP_LOSS}% 미도달")
+            stop_loss_price = state.entry_price * (1 - BULLISH_STOP_LOSS_PRICE / 100 / LEVERAGE)
+            if current_price > stop_loss_price:
+                reasons.append(f"스탑로스가격 {stop_loss_price:.2f} 미터치 (현재 {current_price:.2f})")
+            if state.trailing_stop_active:
+                drop = state.best_pnl_pct - pnl_pct
+                reasons.append(f"트레일링스톱: 최고 {state.best_pnl_pct:.2f}%에서 {drop:.2f}% 하락 (청산기준 {BULLISH_TRAILING_STOP_PCT}%)")
+        elif state.entry_regime == "sideways":
+            if state.box_high > 0 and state.box_low > 0:
+                box_low_threshold = state.box_low * 0.99
+                if current_price >= box_low_threshold:
+                    reasons.append(f"박스권 하단 {box_low_threshold:.2f} 미이탈")
+            reasons.append(f"손절4% 미도달 (현재 {pnl_pct:.2f}%)")
+        else:
+            reasons.append(f"익절{BULLISH_PROFIT_TARGET}% 미도달 (현재 {pnl_pct:.2f}%)")
+            reasons.append(f"손절{BULLISH_STOP_LOSS}% 미도달")
+    else:  # SHORT
+        if state.entry_regime == "bearish":
+            reasons.append(f"익절{BEARISH_PROFIT_TARGET}% 미도달 (현재 {pnl_pct:.2f}%)")
+            reasons.append(f"손절{BEARISH_STOP_LOSS}% 미도달")
+            stop_loss_price = state.entry_price * (1 + BEARISH_STOP_LOSS_PRICE / 100 / LEVERAGE)
+            if current_price < stop_loss_price:
+                reasons.append(f"스탑로스가격 {stop_loss_price:.2f} 미터치 (현재 {current_price:.2f})")
+            if state.trailing_stop_active:
+                drop = state.best_pnl_pct - pnl_pct
+                reasons.append(f"트레일링스톱: 최고 {state.best_pnl_pct:.2f}%에서 {drop:.2f}% 하락 (청산기준 {BEARISH_TRAILING_STOP_PCT}%)")
+        elif state.entry_regime == "sideways":
+            if state.box_high > 0 and state.box_low > 0:
+                box_high_threshold = state.box_high * 1.01
+                if current_price <= box_high_threshold:
+                    reasons.append(f"박스권 상단 {box_high_threshold:.2f} 미이탈")
+            reasons.append(f"손절4% 미도달 (현재 {pnl_pct:.2f}%)")
+        else:
+            reasons.append(f"익절{BEARISH_PROFIT_TARGET}% 미도달 (현재 {pnl_pct:.2f}%)")
+            reasons.append(f"손절{BEARISH_STOP_LOSS}% 미도달")
+    return " | ".join(reasons)
+
+
 def check_scalp_stop_loss_and_profit(state: PaperState, current_price: float, candle: pd.Series) -> bool:
     """
     스캘핑용 손절, 수익 실현, 트레일링 스톱 체크.
@@ -456,8 +508,101 @@ def check_scalp_stop_loss_and_profit(state: PaperState, current_price: float, ca
             if False:  # 최대 보유 시간 체크 비활성화
                 close_position(state, candle, "SHORT", f"최대 보유 시간 초과 ({hold_time_min:.0f}분)")
                 return True
+
+    # 청산하지 않음 - 사유 로그 (스팸 방지: NO_EXIT_REASON_LOG_INTERVAL 초마다)
+    global _last_no_exit_log_time
+    now = time.time()
+    if now - _last_no_exit_log_time >= NO_EXIT_REASON_LOG_INTERVAL:
+        _last_no_exit_log_time = now
+        side = "LONG" if state.has_long_position else "SHORT"
+        if state.has_long_position:
+            pnl_pct = (current_price - state.entry_price) / state.entry_price * LEVERAGE * 100
+        else:
+            pnl_pct = (state.entry_price - current_price) / state.entry_price * LEVERAGE * 100
+        reason = _get_no_scalp_exit_reason(state, current_price, pnl_pct, side)
+        log(f"[손절/익절청산안함] {side} 보유중, 수익률={pnl_pct:.2f}%, regime={state.entry_regime} | 이유: {reason}")
     
     return False
+
+
+def _get_no_entry_reason(
+    regime: str, rsi: float, price: float, short_ma: float, long_ma: float,
+    price_history: Optional[list], price_position: Optional[float],
+) -> str:
+    """진입하지 않는 이유를 설명하는 문자열 반환."""
+    reasons = []
+    if regime == "bullish":
+        if rsi > 50:
+            reasons.append(f"RSI {rsi:.1f} > 50 (진입조건: RSI<=50)")
+        if price <= short_ma:
+            reasons.append(f"가격 {price:.2f} <= MA단기 {short_ma:.2f}")
+        if price <= long_ma:
+            reasons.append(f"가격 {price:.2f} <= MA장기 {long_ma:.2f}")
+        if not reasons:
+            reasons.append("조건 미충족 (원인 불명)")
+    elif regime == "bearish":
+        if rsi < 52:
+            reasons.append(f"RSI {rsi:.1f} < 52 (진입조건: RSI>=52)")
+        if price >= short_ma:
+            reasons.append(f"가격 {price:.2f} >= MA단기 {short_ma:.2f}")
+        if price >= long_ma:
+            reasons.append(f"가격 {price:.2f} >= MA장기 {long_ma:.2f}")
+        if not reasons:
+            reasons.append("조건 미충족 (원인 불명)")
+    elif regime == "sideways":
+        if price_history is None or len(price_history) < SIDEWAYS_BOX_PERIOD:
+            reasons.append("박스권 데이터 부족")
+        elif price_position is not None:
+            # price_position 0~1: 0=하단, 1=상단
+            if price_position > SIDEWAYS_BOX_BOTTOM_MARGIN and price_position < (1.0 - SIDEWAYS_BOX_TOP_MARGIN):
+                reasons.append(f"가격이 박스권 중간 (position={price_position:.2f}, 하단~{SIDEWAYS_BOX_BOTTOM_MARGIN}, 상단~{1-SIDEWAYS_BOX_TOP_MARGIN:.2f})")
+            elif price_position <= SIDEWAYS_BOX_BOTTOM_MARGIN:
+                if rsi > 35:
+                    reasons.append(f"하단 근처지만 RSI {rsi:.1f} > 35")
+                else:
+                    reasons.append("하단 근처인데 진입안함 (박스 터치 조건 등)")
+            elif price_position >= (1.0 - SIDEWAYS_BOX_TOP_MARGIN):
+                if rsi < 65:
+                    reasons.append(f"상단 근처지만 RSI {rsi:.1f} < 65")
+                else:
+                    reasons.append("상단 근처인데 진입안함 (박스 터치 조건 등)")
+        else:
+            reasons.append("횡보장이나 박스권/터치 조건 미충족")
+    else:
+        reasons.append(f"시장상태={regime}")
+    return "; ".join(reasons)
+
+
+def _get_no_exit_reason(
+    regime: str, is_long: bool, rsi: float, price: float, short_ma: float,
+    price_position: Optional[float],
+) -> str:
+    """전략 시그널 기준 청산하지 않는 이유를 설명하는 문자열 반환."""
+    reasons = []
+    if regime == "bullish" and is_long:
+        if rsi < 70:
+            reasons.append(f"RSI {rsi:.1f} < 70 (청산조건: RSI>=70)")
+        if price >= short_ma:
+            reasons.append(f"가격 {price:.2f} >= MA단기 {short_ma:.2f} (청산조건: 가격 < MA단기)")
+    elif regime == "bearish" and not is_long:
+        if rsi > 30:
+            reasons.append(f"RSI {rsi:.1f} > 30 (청산조건: RSI<=30)")
+        if price <= short_ma:
+            reasons.append(f"가격 {price:.2f} <= MA단기 {short_ma:.2f} (청산조건: 가격 > MA단기)")
+    elif regime == "sideways" and price_position is not None:
+        if is_long:
+            if price_position < (1.0 - SIDEWAYS_BOX_TOP_MARGIN):
+                reasons.append(f"상단 미도달 (position={price_position:.2f} < {1-SIDEWAYS_BOX_TOP_MARGIN:.2f})")
+            if price_position > (0.0 - SIDEWAYS_BOX_BOTTOM_MARGIN * 0.5):
+                reasons.append(f"하단 이탈 아님 (position={price_position:.2f})")
+        else:
+            if price_position > SIDEWAYS_BOX_BOTTOM_MARGIN:
+                reasons.append(f"하단 미도달 (position={price_position:.2f})")
+            if price_position < (1.0 + SIDEWAYS_BOX_TOP_MARGIN * 0.5):
+                reasons.append(f"상단 이탈 아님 (position={price_position:.2f})")
+    else:
+        reasons.append(f"regime={regime}, is_long={is_long}")
+    return "; ".join(reasons) if reasons else "조건 미충족"
 
 
 def apply_strategy_on_candle(state: PaperState, candle: pd.Series, df: Optional[pd.DataFrame] = None) -> None:
@@ -486,9 +631,15 @@ def apply_strategy_on_candle(state: PaperState, candle: pd.Series, df: Optional[
     
     # 박스권 판단을 위한 가격 히스토리 (SIDEWAYS_BOX_PERIOD 사용)
     price_history = None
+    price_position = None
     if df is not None and len(df) >= SIDEWAYS_BOX_PERIOD:
         # 최근 SIDEWAYS_BOX_PERIOD개 캔들의 가격 히스토리
         price_history = df["close"].tail(SIDEWAYS_BOX_PERIOD + 1).tolist()  # 현재 포함
+        box_info = calculate_box_range(price_history, SIDEWAYS_BOX_PERIOD)
+        if box_info:
+            box_high, box_low, box_range = box_info
+            if box_range > 0:
+                price_position = (price - box_low) / box_range
     
     # 스윙 전략 시그널 생성 (RSI + MA만 사용)
     signal = swing_strategy_signal(
@@ -502,17 +653,25 @@ def apply_strategy_on_candle(state: PaperState, candle: pd.Series, df: Optional[
         price_history=price_history,
     )
     
+    regime_kr = {"bullish": "강세장", "bearish": "약세장", "sideways": "횡보장"}[regime]
+    
     # 전략 시그널에 따른 진입/청산 처리
     if signal == "long" and not has_position:
-        regime_kr = {"bullish": "강세장", "bearish": "약세장", "sideways": "횡보장"}[regime]
         open_position(state, price, "LONG", f"스윙 전략 ({regime_kr})", regime, price_history)
     elif signal == "short" and not has_position:
-        regime_kr = {"bullish": "강세장", "bearish": "약세장", "sideways": "횡보장"}[regime]
         open_position(state, price, "SHORT", f"스윙 전략 ({regime_kr})", regime, price_history)
     elif signal == "flat" and has_position:
         side = "LONG" if is_long else "SHORT"
-        regime_kr = {"bullish": "강세장", "bearish": "약세장", "sideways": "횡보장"}[regime]
         close_position(state, candle, side, f"스윙 전략 청산 ({regime_kr})")
+    else:
+        # 진입/청산하지 않음 - 이유 로그
+        if not has_position:
+            reason = _get_no_entry_reason(regime, rsi, price, short_ma, long_ma, price_history, price_position)
+            log(f"[진입안함] 시그널={signal}, 시장={regime_kr}, 가격={price:.2f}, RSI={rsi:.1f} | 이유: {reason}")
+        elif signal == "hold":
+            reason = _get_no_exit_reason(regime, is_long, rsi, price, short_ma, price_position)
+            side = "롱" if is_long else "숏"
+            log(f"[전략청산안함] 보유={side}, 시장={regime_kr}, 가격={price:.2f}, RSI={rsi:.1f} | 이유: {reason}")
     
     # 평가손익 계산 (손절/수익 실현은 별도 함수에서 처리)
     if state.has_long_position:
