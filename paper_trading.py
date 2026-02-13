@@ -550,6 +550,8 @@ def main() -> None:
     exchange = get_public_exchange()
     state = init_state()
 
+    log(f"페이퍼 트레이딩 시작: 초기 잔고={INITIAL_BALANCE:.2f} USDT")
+    
     last_candle_time = None
 
     try:
@@ -588,6 +590,13 @@ def main() -> None:
             # 아직 첫 루프라면, 마지막 캔들을 기준으로만 시작
             if last_candle_time is None:
                 last_candle_time = latest_time
+                pos_status = (
+                    "LONG" if state.has_long_position
+                    else ("SHORT" if state.has_short_position else "NONE")
+                )
+                total_pnl = state.equity - INITIAL_BALANCE
+                roe = (total_pnl / INITIAL_BALANCE * 100) if INITIAL_BALANCE > 0 else 0.0
+                log(f"초기화 완료: 포지션={pos_status}, 가격={current_price:.2f}, 잔고={state.balance:.2f} USDT, Equity={state.equity:.2f} USDT, 총PNL={total_pnl:+.2f} USDT, ROE={roe:+.2f}%")
             # 새로운 캔들이 완성되었을 때만 전략 적용
             elif latest_time > last_candle_time:
                 price = float(latest["close"])
@@ -635,7 +644,11 @@ def main() -> None:
     except KeyboardInterrupt:
         total_pnl = state.equity - INITIAL_BALANCE
         roe = (total_pnl / INITIAL_BALANCE * 100) if INITIAL_BALANCE > 0 else 0.0
-        
+        log(f"프로그램 종료: 최종 잔고={state.balance:.2f} USDT, 총PNL={total_pnl:+.2f} USDT, ROE={roe:+.2f}%")
+    except Exception as e:
+        log(f"오류 발생: {e}", "ERROR")
+        import traceback
+        traceback.print_exc()
 
 
 if __name__ == "__main__":
