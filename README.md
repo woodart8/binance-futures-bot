@@ -1,7 +1,7 @@
-## Binance Futures Bot (5m RSI Swing, Multi-Agent)
+## Binance Futures Bot (Scalping Strategy)
 
-이 프로젝트는 바이낸스 USDS-M 선물에서 5분봉 RSI_SWING 전략으로
-실거래/백테스트/모의투자를 수행하는 구조를 가진다.
+이 프로젝트는 바이낸스 USDS-M 선물에서 1분봉 스캘핑 전략으로
+실거래/모의투자를 수행하는 구조를 가진다.
 
 ### 주요 모듈
 
@@ -16,10 +16,9 @@
   - `calculate_rsi()` : RSI 계산
 
 - `strategy_core.py`  
-  - `rsi_swing_signal()` : RSI_SWING 전략 시그널 생성
-
-- `backtest_core.py`  
-  - `run_long_only_backtest()` : 롱 전략 공통 백테스트 엔진
+  - `rsi_swing_signal()` : RSI 전략 시그널 생성
+  - `rsi_macd_signal()` : RSI+MACD 결합 전략 시그널 생성
+  - `ma_trend_signal()` : 이동평균선 기반 추세 추종 전략 시그널 생성
 
 - `trade_logger.py`  
   - `log_trade()` : 실거래 결과를 `trades_log.csv` 에 기록
@@ -27,18 +26,15 @@
 ### 에이전트들
 
 - `live_trader_agent.py`  
-  - 5분마다 새로운 캔들을 확인하고, RSI_SWING 전략에 따라 **실제 선물 주문**을 전송  
+  - 1분마다 새로운 캔들을 확인하고, RSI 전략에 따라 **실제 선물 주문**을 전송  
   - 진입/청산 시 `trades_log.csv` 에 트레이드 기록 저장
 
 - `strategy_research_agent.py`  
-  - `trades_log.csv` 를 읽어 총 손익, 승률, MDD 등을 출력 (리포트용)
+  - `trades_log.csv` 를 읽어 총 손익, 승률 등을 출력 (리포트용)
 
-- `backtest_agent.py`  
-  - 현재 설정과 여러 RSI_EXIT 후보 값에 대해 백테스트를 수행하고  
-  - 수익률과 MDD를 고려한 점수로 추천 파라미터를 제안
-
-- `paper_trading_5m.py`  
-  - 실제 주문 없이, 퍼블릭 데이터와 가상 잔고로 5분봉 RSI_SWING 전략을 실시간 모의투자
+- `paper_trading.py`  
+  - 실제 주문 없이, 퍼블릭 데이터와 가상 잔고로 1분봉 스캘핑 전략을 실시간 모의투자
+  - 시장 상태에 따라 이동평균선 전략 또는 RSI+MACD 전략 자동 선택
 
 ### 설치
 
@@ -61,7 +57,7 @@ SECRET_KEY=YOUR_BINANCE_FUTURES_SECRET_KEY
 
 ```ini
 [Unit]
-Description=Binance Futures Live Trader (RSI_SWING)
+Description=Binance Futures Live Trader
 After=network.target
 
 [Service]
