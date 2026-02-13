@@ -283,12 +283,17 @@ def open_position(
 
 
 def _get_no_scalp_exit_reason(
-    state: PaperState, current_price: float, pnl_pct: float, side: str
+    state: PaperState, current_price: float, pnl_pct: float, side: str, rsi: float = 50.0
 ) -> str:
-    """손절/익절/트레일링스톱 미청산 사유를 설명하는 문자열 반환."""
+    """손절/익절/트레일링스톱 미청산 사유를 설명하는 문자열 반환 (전략과 동일 조건 기준)."""
     reasons = []
     if side == "LONG":
         if state.entry_regime == "bullish":
+            # RSI 조기 청산: RSI<=30 AND pnl<0 일 때만 청산
+            if pnl_pct < 0 and rsi > BULLISH_EARLY_EXIT_RSI:
+                reasons.append(f"RSI조기청산 미해당 (RSI {rsi:.1f} > {BULLISH_EARLY_EXIT_RSI}, 손실일 때만 적용)")
+            elif pnl_pct >= 0:
+                reasons.append("RSI조기청산 미해당 (손실일 때만 적용)")
             reasons.append(f"익절{BULLISH_PROFIT_TARGET}% 미도달 (현재 {pnl_pct:.2f}%)")
             reasons.append(f"손절{BULLISH_STOP_LOSS}% 미도달")
             stop_loss_price = state.entry_price * (1 - BULLISH_STOP_LOSS_PRICE / 100 / LEVERAGE)
@@ -308,6 +313,11 @@ def _get_no_scalp_exit_reason(
             reasons.append(f"손절{BULLISH_STOP_LOSS}% 미도달")
     else:  # SHORT
         if state.entry_regime == "bearish":
+            # RSI 조기 청산: RSI>=70 AND pnl<0 일 때만 청산
+            if pnl_pct < 0 and rsi < BEARISH_EARLY_EXIT_RSI:
+                reasons.append(f"RSI조기청산 미해당 (RSI {rsi:.1f} < {BEARISH_EARLY_EXIT_RSI}, 손실일 때만 적용)")
+            elif pnl_pct >= 0:
+                reasons.append("RSI조기청산 미해당 (손실일 때만 적용)")
             reasons.append(f"익절{BEARISH_PROFIT_TARGET}% 미도달 (현재 {pnl_pct:.2f}%)")
             reasons.append(f"손절{BEARISH_STOP_LOSS}% 미도달")
             stop_loss_price = state.entry_price * (1 + BEARISH_STOP_LOSS_PRICE / 100 / LEVERAGE)
@@ -519,17 +529,29 @@ def check_scalp_stop_loss_and_profit(state: PaperState, current_price: float, ca
             pnl_pct = (current_price - state.entry_price) / state.entry_price * LEVERAGE * 100
         else:
             pnl_pct = (state.entry_price - current_price) / state.entry_price * LEVERAGE * 100
-        reason = _get_no_scalp_exit_reason(state, current_price, pnl_pct, side)
-        log(f"[손절/익절청산안함] {side} 보유중, 수익률={pnl_pct:.2f}%, regime={state.entry_regime} | 이유: {reason}")
+        rsi = float(candle.get("rsi", 50.0))
+        reason = _get_no_scalp_exit_reason(state, current_price, pnl_pct, side, rsi)
+        log(f"[손절/익절청산안함] {side} 보유중, 수익률={pnl_pct:.2f}%, RSI={rsi:.1f}, regime={state.entry_regime} | 이유: {reason}")
     
     return False
 
 
 def _get_no_entry_reason(
-    regime: str, rsi: float, price: float, short_ma: float, long_ma: float,
-    price_history: Optional[list], price_position: Optional[float],
+    regime: str,
+    rsi: float,
+    price: float,
+    short_ma: float,
+    long_ma: float,
+    price_history: Optional[list],
+    price_position: Optional[float],
+    box_high: Optional[float] = None,
+    box_low: Optional[float] = None,
+    box_range: Optional[float] = None,
+    box_range_pct: Optional[float] = None,
+    top_touches: Optional[int] = None,
+    bottom_touches: Optional[int] = None,
 ) -> str:
-    """진입하지 않는 이유를 설명하는 문자열 반환."""
+    """진입하지 않는 이유를 설명하는 문자열 반환 (전략과 동일 조건 기준)."""
     reasons = []
     if regime == "bullish":
         if rsi > 50:
@@ -552,22 +574,37 @@ def _get_no_entry_reason(
     elif regime == "sideways":
         if price_history is None or len(price_history) < SIDEWAYS_BOX_PERIOD:
             reasons.append("박스권 데이터 부족")
+        elif box_range is None or box_range <= 0:
+            reasons.append("박스권 계산 불가 (box_range<=0)")
+        elif box_range_pct is not None and box_range_pct < 1.0:
+            reasons.append(f"박스권 범위 부족 ({box_range_pct:.2f}% < 1%)")
+        elif box_low is not None and box_high is not None and (price < box_low or price > box_high):
+            reasons.append(f"가격이 박스권 밖 (box_low={box_low:.2f}, box_high={box_high:.2f}, price={price:.2f})")
+        elif top_touches is not None and bottom_touches is not None:
+            if top_touches < 2 or bottom_touches < 2:
+                reasons.append(f"박스 상/하단 터치 부족 (top={top_touches}, bottom={bottom_touches}, 필요: 각 2회)")
+            elif price_position is not None:
+                if price_position > SIDEWAYS_BOX_BOTTOM_MARGIN and price_position < (1.0 - SIDEWAYS_BOX_TOP_MARGIN):
+                    reasons.append(f"가격이 박스권 중간 (position={price_position:.2f})")
+                elif price_position <= SIDEWAYS_BOX_BOTTOM_MARGIN:
+                    if rsi > 35:
+                        reasons.append(f"하단 근처지만 RSI {rsi:.1f} > 35")
+                    else:
+                        reasons.append("하단 근처+RSI 조건 충족인데 진입안함 (원인 불명)")
+                elif price_position >= (1.0 - SIDEWAYS_BOX_TOP_MARGIN):
+                    if rsi < 65:
+                        reasons.append(f"상단 근처지만 RSI {rsi:.1f} < 65")
+                    else:
+                        reasons.append("상단 근처+RSI 조건 충족인데 진입안함 (원인 불명)")
         elif price_position is not None:
-            # price_position 0~1: 0=하단, 1=상단
             if price_position > SIDEWAYS_BOX_BOTTOM_MARGIN and price_position < (1.0 - SIDEWAYS_BOX_TOP_MARGIN):
-                reasons.append(f"가격이 박스권 중간 (position={price_position:.2f}, 하단~{SIDEWAYS_BOX_BOTTOM_MARGIN}, 상단~{1-SIDEWAYS_BOX_TOP_MARGIN:.2f})")
+                reasons.append(f"가격이 박스권 중간 (position={price_position:.2f})")
             elif price_position <= SIDEWAYS_BOX_BOTTOM_MARGIN:
-                if rsi > 35:
-                    reasons.append(f"하단 근처지만 RSI {rsi:.1f} > 35")
-                else:
-                    reasons.append("하단 근처인데 진입안함 (박스 터치 조건 등)")
+                reasons.append(f"하단 근처인데 RSI {rsi:.1f} > 35" if rsi > 35 else "하단 근처, 박스 터치 조건 미충족")
             elif price_position >= (1.0 - SIDEWAYS_BOX_TOP_MARGIN):
-                if rsi < 65:
-                    reasons.append(f"상단 근처지만 RSI {rsi:.1f} < 65")
-                else:
-                    reasons.append("상단 근처인데 진입안함 (박스 터치 조건 등)")
+                reasons.append(f"상단 근처인데 RSI {rsi:.1f} < 65" if rsi < 65 else "상단 근처, 박스 터치 조건 미충족")
         else:
-            reasons.append("횡보장이나 박스권/터치 조건 미충족")
+            reasons.append("횡보장 박스권/터치 조건 미충족")
     else:
         reasons.append(f"시장상태={regime}")
     return "; ".join(reasons)
@@ -632,14 +669,21 @@ def apply_strategy_on_candle(state: PaperState, candle: pd.Series, df: Optional[
     # 박스권 판단을 위한 가격 히스토리 (SIDEWAYS_BOX_PERIOD 사용)
     price_history = None
     price_position = None
+    box_high_val, box_low_val, box_range_val = None, None, None
+    box_range_pct_val = None
+    top_touches_val, bottom_touches_val = None, None
     if df is not None and len(df) >= SIDEWAYS_BOX_PERIOD:
         # 최근 SIDEWAYS_BOX_PERIOD개 캔들의 가격 히스토리
         price_history = df["close"].tail(SIDEWAYS_BOX_PERIOD + 1).tolist()  # 현재 포함
         box_info = calculate_box_range(price_history, SIDEWAYS_BOX_PERIOD)
         if box_info:
-            box_high, box_low, box_range = box_info
-            if box_range > 0:
-                price_position = (price - box_low) / box_range
+            box_high_val, box_low_val, box_range_val = box_info
+            if box_range_val and box_range_val > 0:
+                price_position = (price - box_low_val) / box_range_val
+                box_range_pct_val = box_range_val / box_low_val * 100
+                recent_prices = price_history[-SIDEWAYS_BOX_PERIOD:] if price_history else []
+                top_touches_val = sum(1 for p in recent_prices if abs(p - box_high_val) / box_high_val < 0.01)
+                bottom_touches_val = sum(1 for p in recent_prices if abs(p - box_low_val) / box_low_val < 0.01)
     
     # 스윙 전략 시그널 생성 (RSI + MA만 사용)
     signal = swing_strategy_signal(
@@ -666,7 +710,11 @@ def apply_strategy_on_candle(state: PaperState, candle: pd.Series, df: Optional[
     else:
         # 진입/청산하지 않음 - 이유 로그
         if not has_position:
-            reason = _get_no_entry_reason(regime, rsi, price, short_ma, long_ma, price_history, price_position)
+            reason = _get_no_entry_reason(
+                regime, rsi, price, short_ma, long_ma, price_history, price_position,
+                box_high=box_high_val, box_low=box_low_val, box_range=box_range_val,
+                box_range_pct=box_range_pct_val, top_touches=top_touches_val, bottom_touches=bottom_touches_val,
+            )
             log(f"[진입안함] 시그널={signal}, 시장={regime_kr}, 가격={price:.2f}, RSI={rsi:.1f} | 이유: {reason}")
         elif signal == "hold":
             reason = _get_no_exit_reason(regime, is_long, rsi, price, short_ma, price_position)
