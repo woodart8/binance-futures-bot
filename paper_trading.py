@@ -78,12 +78,13 @@ _last_reason_log_time: float = 0.0
 _daily_limit_logged_date: str = ""
 
 
-def _log_daily_limit_once(current_date: str, daily_loss_pct: float) -> None:
+def _log_daily_limit_once(current_date: str, daily_loss_pct: float, regime_kr: str = "") -> None:
     """일일손실한도 로그는 당일 1번만."""
     global _daily_limit_logged_date
     if _daily_limit_logged_date != current_date:
         _daily_limit_logged_date = current_date
-        log(f"[진입안함] 일일손실한도 {daily_loss_pct:.1f}% 도달")
+        kr = f"{regime_kr} | " if regime_kr else ""
+        log(f"[진입안함] {kr}일일손실한도 {daily_loss_pct:.1f}% 도달")
 
 
 def _should_log_reason() -> bool:
@@ -403,7 +404,8 @@ def check_scalp_stop_loss_and_profit(state: PaperState, current_price: float, ca
                 close_position(state, candle, "LONG", f"패턴손절({state.pattern_type})")
                 return True
             if _should_log_reason():
-                log(f"[손절/익절청산안함] 패턴 익절/손절 대기 중 ({state.pattern_type})")
+                regime_kr = {"bullish": "강세장", "bearish": "약세장", "sideways": "횡보장"}.get(state.entry_regime or "", state.entry_regime or "?")
+                log(f"[손절/익절청산안함] {regime_kr} | 패턴 익절/손절 대기 중 ({state.pattern_type})")
             return False  # 패턴 대기 중, config 기반 로직 스킵
         
         # 최고가 업데이트
@@ -506,7 +508,8 @@ def check_scalp_stop_loss_and_profit(state: PaperState, current_price: float, ca
                 close_position(state, candle, "SHORT", f"패턴손절({state.pattern_type})")
                 return True
             if _should_log_reason():
-                log(f"[손절/익절청산안함] 패턴 익절/손절 대기 중 ({state.pattern_type})")
+                regime_kr = {"bullish": "강세장", "bearish": "약세장", "sideways": "횡보장"}.get(state.entry_regime or "", state.entry_regime or "?")
+                log(f"[손절/익절청산안함] {regime_kr} | 패턴 익절/손절 대기 중 ({state.pattern_type})")
             return False  # 패턴 대기 중, config 기반 로직 스킵
         
         # 최저가 업데이트
@@ -607,8 +610,9 @@ def check_scalp_stop_loss_and_profit(state: PaperState, current_price: float, ca
         else:
             pnl_pct = (state.entry_price - current_price) / state.entry_price * LEVERAGE * 100
         if _should_log_reason():
+            regime_kr = {"bullish": "강세장", "bearish": "약세장", "sideways": "횡보장"}.get(state.entry_regime or "", state.entry_regime or "?")
             reason = _reason_no_exit_scalp(state, pnl_pct, side, current_price)
-            log(f"[손절/익절청산안함] {reason}")
+            log(f"[손절/익절청산안함] {regime_kr} | {reason}")
     return False
 
 
@@ -697,7 +701,7 @@ def apply_strategy_on_candle(
     # 전략 시그널에 따른 진입/청산 처리
     if signal == "long" and not has_position:
         if daily_limit_hit:
-            _log_daily_limit_once(current_date, daily_loss_pct)
+            _log_daily_limit_once(current_date, daily_loss_pct, regime_kr)
         else:
             pt, ptg, pst = "", 0.0, 0.0
             if pattern_info and pattern_info.side == "LONG":
@@ -711,7 +715,7 @@ def apply_strategy_on_candle(
             )
     elif signal == "short" and not has_position:
         if daily_limit_hit:
-            _log_daily_limit_once(current_date, daily_loss_pct)
+            _log_daily_limit_once(current_date, daily_loss_pct, regime_kr)
         else:
             pt, ptg, pst = "", 0.0, 0.0
             if pattern_info and pattern_info.side == "SHORT":
@@ -731,13 +735,13 @@ def apply_strategy_on_candle(
         if _should_log_reason():
             if not has_position:
                 if daily_limit_hit:
-                    _log_daily_limit_once(current_date, daily_loss_pct)
+                    _log_daily_limit_once(current_date, daily_loss_pct, regime_kr)
                 else:
                     reason = _reason_no_entry(regime, signal, rsi, price, short_ma, long_ma)
-                    log(f"[진입안함] {reason}")
+                    log(f"[진입안함] {regime_kr} | {reason}")
             elif has_position and signal == "hold":
                 reason = _reason_no_exit_strategy(regime, is_long, rsi, price, short_ma)
-                log(f"[전략청산안함] {reason}")
+                log(f"[전략청산안함] {regime_kr} | {reason}")
     
     # 평가손익 계산 (손절/수익 실현은 별도 함수에서 처리)
     if state.has_long_position:
