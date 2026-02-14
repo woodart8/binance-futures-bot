@@ -35,6 +35,7 @@ def detect_market_regime(
     ma_100: float = 0.0,
     params: MovingAverageParams = MovingAverageParams(),
     price_history: Optional[List[float]] = None,
+    box_period: Optional[int] = None,
 ) -> MarketRegime:
     """
     시장 상태 판단 (강세장/약세장/횡보장).
@@ -51,6 +52,7 @@ def detect_market_regime(
     :param ma_100: 장기 이동평균선 값 (MA 100)
     :param params: 이동평균선 파라미터 (사용하지 않지만 호환성을 위해 유지)
     :param price_history: 가격 히스토리 (횡보장 판단용)
+    :param box_period: 횡보장 박스권 기간 (None이면 SIDEWAYS_BOX_PERIOD)
     :return: 시장 상태 ("bullish", "bearish", "sideways")
     """
     # MA 값이 유효하지 않으면 횡보장으로 판단
@@ -86,8 +88,8 @@ def detect_market_regime(
         last_price = recent_prices[-1]
         if first_price > 0:
             price_change_pct = ((last_price - first_price) / first_price) * 100
-            # 가격이 3% 이상 하락하면 하락 추세로 판단
-            if price_change_pct < -3.0:
+            # 가격이 2.5% 이상 하락하면 하락 추세로 판단 (3→2.5% 완화)
+            if price_change_pct < -2.5:
                 price_trend_bearish = True
     
     # MA 정배열이어도 가격이 MA 아래에 있거나 가격 하락 추세면 하락장으로 판단
@@ -98,8 +100,9 @@ def detect_market_regime(
     else:
         # 이동평균선이 뒤섞여있음 - 횡보장 후보
         # 추가 확인: 상단 저항과 하단 지지가 강해 위 아래로 반복적으로 왔다갔다 하는지 확인
-        if price_history and len(price_history) >= SIDEWAYS_BOX_PERIOD:
-            box_info = calculate_box_range(price_history, SIDEWAYS_BOX_PERIOD)
+        period = box_period if box_period is not None else SIDEWAYS_BOX_PERIOD
+        if price_history and len(price_history) >= period:
+            box_info = calculate_box_range(price_history, period)
             if box_info:
                 box_high, box_low, box_range = box_info
                 
@@ -111,7 +114,7 @@ def detect_market_regime(
                         # 가격이 박스권 내에 있는지 확인
                         if box_low <= price <= box_high:
                             # 최근 가격이 상단과 하단을 여러 번 터치했는지 확인
-                            recent_prices = price_history[-SIDEWAYS_BOX_PERIOD:]
+                            recent_prices = price_history[-period:]
                             top_touches = sum(1 for p in recent_prices if abs(p - box_high) / box_high < 0.01)  # 상단 1% 범위
                             bottom_touches = sum(1 for p in recent_prices if abs(p - box_low) / box_low < 0.01)  # 하단 1% 범위
                             
@@ -122,6 +125,35 @@ def detect_market_regime(
         # 명확하게 상승장/하락장/횡보장이 아닌 경우 관망
         # 이동평균선이 뒤섞여있지만 횡보장 조건을 만족하지 않으면 거래하지 않음
         return "sideways"  # 관망 (횡보장으로 분류하되 실제로는 거래하지 않음)
+
+
+def detect_sideways_bias(price_history: Optional[List[float]] = None) -> str:
+    """
+    횡보장 내 추세 판단: 저점 하락 → 숏 위주, 고점 상승 → 롱 위주.
+    검증 기간: 1일 (SIDEWAYS_BOX_PERIOD)
+    
+    :param price_history: 가격 히스토리
+    :return: "short_bias" (저점 하락), "long_bias" (고점 상승), "neutral"
+    """
+    if not price_history or len(price_history) < SIDEWAYS_BOX_PERIOD:
+        return "neutral"
+    n = SIDEWAYS_BOX_PERIOD
+    recent = price_history[-n:]
+    first_half = recent[: n // 2]
+    second_half = recent[n // 2 :]
+    min_first = min(first_half)
+    min_second = min(second_half)
+    max_first = max(first_half)
+    max_second = max(second_half)
+    # 저점이 0.5% 이상 하락 → 숏 위주
+    lower_lows = min_second < min_first * 0.995 if min_first > 0 else False
+    # 고점이 0.5% 이상 상승 → 롱 위주
+    higher_highs = max_second > max_first * 1.005 if max_first > 0 else False
+    if lower_lows and not higher_highs:
+        return "short_bias"
+    if higher_highs and not lower_lows:
+        return "long_bias"
+    return "neutral"
 
 
 def calculate_box_range(price_history: List[float], period: int = SIDEWAYS_BOX_PERIOD) -> Optional[tuple]:
@@ -185,42 +217,51 @@ def swing_strategy_signal(
         
         elif regime == "bearish":
             # 약세장: 숏만 진입
-            # 진입 조건: RSI >= 52 - 반등 후 하락 진입
-            # 하락장에서는 RSI가 높을 때 (반등 후 하락) 진입
-            # RSI >= 52 + 가격이 MA 7 아래 + 가격이 MA 20 아래
-            if rsi_value >= 52 and price < short_ma and price < long_ma:
+            # 진입 조건: RSI >= 51 (강세 RSI 50과 대칭)
+            # RSI >= 51 + 가격이 MA 7 아래 + 가격이 MA 20 아래
+            if rsi_value >= 51 and price < short_ma and price < long_ma:
                 return "short"
         
         elif regime == "sideways":
-            # 횡보장: 박스권 상단/하단 기반
-            # 단, 명확한 횡보장 패턴이 확인된 경우에만 거래
+            # 횡보장: 박스권 + 저점/고점 추세에 따른 편향
+            # 저점 하락 → 숏 위주, 고점 상승 → 롱 위주
+            bias = detect_sideways_bias(price_history)
             box_info = calculate_box_range(price_history, SIDEWAYS_BOX_PERIOD)
             if box_info:
                 box_high, box_low, box_range = box_info
                 
-                # 박스권 범위가 충분히 크고, 상단/하단 터치가 확인된 경우에만 거래
+                # 박스권 범위가 충분히 크고
                 if box_range > 0:
                     box_range_pct = box_range / box_low * 100
                     if box_range_pct >= 1.0 and box_low <= price <= box_high:
                         recent_prices = price_history[-SIDEWAYS_BOX_PERIOD:] if price_history else []
                         top_touches = sum(1 for p in recent_prices if abs(p - box_high) / box_high < 0.01)
                         bottom_touches = sum(1 for p in recent_prices if abs(p - box_low) / box_low < 0.01)
+                        price_position = (price - box_low) / box_range
                         
-                        # 명확한 횡보장 패턴이 확인된 경우에만 진입
-                        if top_touches >= 2 and bottom_touches >= 2:
-                            price_position = (price - box_low) / box_range
-                            
-                            # 박스권 하단 근처에서 롱 진입 (2% 범위)
-                            if price_position <= (0.0 + SIDEWAYS_BOX_BOTTOM_MARGIN):
-                                if rsi_value <= 35:
-                                    return "long"
-                            
-                            # 박스권 상단 근처에서 숏 진입 (2% 범위)
-                            if price_position >= (1.0 - SIDEWAYS_BOX_TOP_MARGIN):
-                                if rsi_value >= 65:
+                        # 숏 위주 (저점 하락): 상단 50% 구간에서 숏, 하단에서만 롱
+                        if bias == "short_bias":
+                            if top_touches >= 1 and bottom_touches >= 1:
+                                if price_position >= 0.5 and rsi_value >= 52:
                                     return "short"
+                                if price_position <= (0.0 + SIDEWAYS_BOX_BOTTOM_MARGIN) and rsi_value <= 35:
+                                    return "long"
+                        
+                        # 롱 위주 (고점 상승): 하단 50% 구간에서 롱, 상단에서만 숏
+                        elif bias == "long_bias":
+                            if top_touches >= 1 and bottom_touches >= 1:
+                                if price_position <= 0.5 and rsi_value <= 48:
+                                    return "long"
+                                if price_position >= (1.0 - SIDEWAYS_BOX_TOP_MARGIN) and rsi_value >= 65:
+                                    return "short"
+                        
+                        # 중립: 박스권 상단/하단 진입 (터치 1회 이상)
+                        elif top_touches >= 1 and bottom_touches >= 1:
+                            if price_position <= (0.0 + SIDEWAYS_BOX_BOTTOM_MARGIN) and rsi_value <= 35:
+                                return "long"
+                            if price_position >= (1.0 - SIDEWAYS_BOX_TOP_MARGIN) and rsi_value >= 65:
+                                return "short"
             
-            # 명확한 횡보장 패턴이 아니면 관망 (거래하지 않음)
             return "hold"
     
     else:
@@ -229,15 +270,15 @@ def swing_strategy_signal(
         # 여기서는 추가적인 시그널 기반 청산만 제공 (선택적)
         
         if regime == "bullish":
-            # 강세장 롱 청산: RSI 과매수 또는 가격이 MA 7 아래로 떨어짐
+            # 강세장 롱 청산 (단타): RSI 과매수 또는 가격이 MA 7 아래로 떨어짐
             if is_long:
-                if rsi_value >= 70 or price < short_ma:
+                if rsi_value >= 65 or price < short_ma:
                     return "flat"
         
         elif regime == "bearish":
-            # 약세장 숏 청산: RSI 과매도 또는 가격이 MA 7 위로 올라감
+            # 약세장 숏 청산 (단타): RSI 과매도 또는 가격이 MA 7 위로 올라감
             if not is_long:
-                if rsi_value <= 30 or price > short_ma:
+                if rsi_value <= 35 or price > short_ma:
                     return "flat"
         
         elif regime == "sideways":

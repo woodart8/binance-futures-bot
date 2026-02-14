@@ -1,7 +1,7 @@
 """
 전략 검증 시스템.
 
-5분봉 기준으로 90일치 데이터를 수집하여 백테스트를 실행합니다.
+5분봉 기준으로 1년(365일)치 데이터를 수집하여 백테스트를 실행합니다.
 """
 
 import pandas as pd
@@ -21,8 +21,8 @@ def validate_strategy() -> bool:
     """
     exchange = get_public_exchange()
     
-    target_days = 90
-    target_candles = target_days * 24 * 12
+    target_days = 365  # 1년
+    target_candles = target_days * 24 * 12  # 5분봉: 하루 288개
     
     all_ohlcv = []
     batch_size = 1500  # 바이낸스 최대 제한
@@ -89,20 +89,18 @@ def validate_strategy() -> bool:
     monthly_return = (result.total_pnl_pct / days) * 365 / 12 if days > 0 else 0.0
     annual_return = monthly_return * 12
     
-    # 통과 여부 판단
-    passed = (
-        monthly_return >= 2.0 and  # 월간 수익률 최소 2%
-        result.max_drawdown <= 15.0 and  # 최대 낙폭 15% 이하
-        result.win_rate >= 40.0 and  # 승률 최소 40%
-        result.profit_factor >= 1.0  # Profit Factor 최소 1.0
-    )
+    # 통과 여부 판단 (항목별)
+    m_ret_ok = monthly_return >= 2.0
+    mdd_ok = result.max_drawdown <= 15.0
+    wr_ok = result.win_rate >= 40.0
+    pf_ok = result.profit_factor >= 1.0
+    passed = m_ret_ok and mdd_ok and wr_ok and pf_ok
     
-    print(f"\n[종합 평가]")
-    if passed:
-        print(f"  [PASS] 검증 통과")
-    else:
-        print(f"  [FAIL] 검증 실패")
-    
+    print(f"\n[검증 기준별 결과]")
+    print(f"  월간수익률 >=2%:   {monthly_return:.2f}% {'[OK]' if m_ret_ok else '[FAIL]'}")
+    print(f"  최대낙폭 <=15%:    {result.max_drawdown:.2f}% {'[OK]' if mdd_ok else '[FAIL]'}")
+    print(f"  승률 >=40%:       {result.win_rate:.2f}% {'[OK]' if wr_ok else '[FAIL]'}")
+    print(f"  Profit Factor >=1.0: {result.profit_factor:.2f} {'[OK]' if pf_ok else '[FAIL]'}")
     print("=" * 60 + "\n")
     
     return passed

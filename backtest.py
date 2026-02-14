@@ -18,6 +18,9 @@ from config import (
     MA_LONG_PERIOD,
     MA_MID_PERIOD,
     MA_LONGEST_PERIOD,
+    DAILY_LOSS_LIMIT_PCT,
+    SIDEWAYS_BOX_TOP_MARGIN,
+    SIDEWAYS_BOX_BOTTOM_MARGIN,
     BULLISH_PROFIT_TARGET,
     BULLISH_PROFIT_TARGET_PARTIAL,
     BULLISH_PARTIAL_EXIT_PCT,
@@ -35,8 +38,7 @@ from config import (
     BEARISH_TRAILING_STOP_ACTIVATION,
     BEARISH_TRAILING_STOP_PCT,
     SIDEWAYS_BOX_PERIOD,
-    SIDEWAYS_BOX_TOP_MARGIN,
-    SIDEWAYS_BOX_BOTTOM_MARGIN,
+    SIDEWAYS_STOP_LOSS,
 )
 from indicators import calculate_rsi, calculate_ma
 from strategy_core import (
@@ -44,6 +46,8 @@ from strategy_core import (
     swing_strategy_signal,
     detect_market_regime,
 )
+import chart_patterns
+from chart_patterns import detect_chart_pattern, ChartPattern
 
 
 @dataclass
@@ -143,7 +147,7 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
     :param df: OHLCV 데이터프레임 (timestamp, open, high, low, close, volume)
     :return: 백테스트 결과
     """
-    # 지표 계산
+    # 지표 계산 (5분봉)
     df = df.copy()
     df["rsi"] = calculate_rsi(df["close"], RSI_PERIOD)
     df["ma_short"] = calculate_ma(df["close"], MA_SHORT_PERIOD)
@@ -178,6 +182,10 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
     losses = []
     trade_details = []
     
+    # 일일 손실 한도 추적
+    daily_start_balance = INITIAL_BALANCE
+    daily_start_date = ""
+    
     # 진입 시점 정보 저장용
     entry_info = {
         "index": 0,
@@ -195,7 +203,13 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
     ma_params = MovingAverageParams(
         short_period=MA_SHORT_PERIOD,
         long_period=MA_LONG_PERIOD,
-        trend_threshold=0.005,  # 0.5%로 더 엄격하게 (횡보장 판단 강화)
+        trend_threshold=0.005,
+    )
+    
+    ma_params = MovingAverageParams(
+        short_period=MA_SHORT_PERIOD,
+        long_period=MA_LONG_PERIOD,
+        trend_threshold=0.005,
     )
     
     total_rows = len(df)
@@ -203,6 +217,8 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
     
     # 가격 히스토리를 미리 배열로 변환 (성능 최적화)
     close_prices = df["close"].values
+    high_prices = df["high"].values
+    low_prices = df["low"].values
     
     for i, row in df.iterrows():
         price = float(row["close"])
@@ -211,11 +227,137 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
         rsi = float(row["rsi"])
         short_ma = float(row["ma_short"])
         long_ma = float(row["ma_long"])
+        ma_50 = float(row.get("ma_50", 0.0))
+        ma_100 = float(row.get("ma_100", 0.0))
+        if i >= SIDEWAYS_BOX_PERIOD:
+            price_history_for_regime = close_prices[i - SIDEWAYS_BOX_PERIOD:i + 1].tolist()
+        else:
+            price_history_for_regime = close_prices[:i + 1].tolist()
+        current_regime = detect_market_regime(short_ma, long_ma, price, ma_50, ma_100, ma_params, price_history_for_regime)
         
         # 손절/수익 실현 체크 (새로운 전략에 맞게)
         if has_position:
             regime_at_entry = entry_info.get("regime", "sideways")
             pnl_pct = (price - entry_price) / entry_price * LEVERAGE * 100 if is_long else (entry_price - price) / entry_price * LEVERAGE * 100
+            
+            # 차트 패턴 진입 시 패턴 정석 익절/손절 적용 (config 퍼센트 무시)
+            pattern_target = entry_info.get("pattern_target")
+            pattern_stop = entry_info.get("pattern_stop")
+            if pattern_target is not None and pattern_stop is not None:
+                if is_long:
+                    if price >= pattern_target:
+                        remaining_pnl = pnl_pct / 100 * balance * current_position_size
+                        fee = balance * current_position_size * FEE_RATE
+                        net_pnl = remaining_pnl - fee
+                        balance += net_pnl
+                        trades.append(net_pnl)
+                        wins.append(net_pnl)
+                        trade_details.append(TradeDetail(
+                            side="LONG",
+                            entry_price=entry_info.get("entry_price", entry_price),
+                            exit_price=price,
+                            entry_time=entry_info.get("index", i),
+                            exit_time=i,
+                            pnl=net_pnl,
+                            pnl_pct=pnl_pct,
+                            entry_rsi=entry_info.get("rsi", rsi),
+                            exit_rsi=rsi,
+                            regime=regime_at_entry,
+                            reason=f"패턴익절({entry_info.get('pattern_type','')})"
+                        ))
+                        has_position = False
+                        partial_profit_taken = False
+                        trailing_stop_active = False
+                        best_pnl_pct = 0.0
+                        current_position_size = POSITION_SIZE_PERCENT
+                        equity = balance
+                        continue
+                    if price <= pattern_stop:
+                        exit_price_used = pattern_stop
+                        pnl_at_exit = (exit_price_used - entry_price) / entry_price * LEVERAGE * 100
+                        remaining_pnl = pnl_at_exit / 100 * balance * current_position_size
+                        fee = balance * current_position_size * FEE_RATE
+                        net_pnl = remaining_pnl - fee
+                        balance += net_pnl
+                        trades.append(net_pnl)
+                        losses.append(net_pnl)
+                        trade_details.append(TradeDetail(
+                            side="LONG",
+                            entry_price=entry_info.get("entry_price", entry_price),
+                            exit_price=exit_price_used,
+                            entry_time=entry_info.get("index", i),
+                            exit_time=i,
+                            pnl=net_pnl,
+                            pnl_pct=pnl_at_exit,
+                            entry_rsi=entry_info.get("rsi", rsi),
+                            exit_rsi=rsi,
+                            regime=regime_at_entry,
+                            reason=f"패턴손절({entry_info.get('pattern_type','')})"
+                        ))
+                        has_position = False
+                        partial_profit_taken = False
+                        trailing_stop_active = False
+                        best_pnl_pct = 0.0
+                        current_position_size = POSITION_SIZE_PERCENT
+                        equity = balance
+                        continue
+                else:  # SHORT
+                    if price <= pattern_target:
+                        remaining_pnl = pnl_pct / 100 * balance * current_position_size
+                        fee = balance * current_position_size * FEE_RATE
+                        net_pnl = remaining_pnl - fee
+                        balance += net_pnl
+                        trades.append(net_pnl)
+                        wins.append(net_pnl)
+                        trade_details.append(TradeDetail(
+                            side="SHORT",
+                            entry_price=entry_info.get("entry_price", entry_price),
+                            exit_price=price,
+                            entry_time=entry_info.get("index", i),
+                            exit_time=i,
+                            pnl=net_pnl,
+                            pnl_pct=pnl_pct,
+                            entry_rsi=entry_info.get("rsi", rsi),
+                            exit_rsi=rsi,
+                            regime=regime_at_entry,
+                            reason=f"패턴익절({entry_info.get('pattern_type','')})"
+                        ))
+                        has_position = False
+                        partial_profit_taken = False
+                        trailing_stop_active = False
+                        best_pnl_pct = 0.0
+                        current_position_size = POSITION_SIZE_PERCENT
+                        equity = balance
+                        continue
+                    if price >= pattern_stop:
+                        exit_price_used = pattern_stop
+                        pnl_at_exit = (entry_price - exit_price_used) / entry_price * LEVERAGE * 100
+                        remaining_pnl = pnl_at_exit / 100 * balance * current_position_size
+                        fee = balance * current_position_size * FEE_RATE
+                        net_pnl = remaining_pnl - fee
+                        balance += net_pnl
+                        trades.append(net_pnl)
+                        losses.append(net_pnl)
+                        trade_details.append(TradeDetail(
+                            side="SHORT",
+                            entry_price=entry_info.get("entry_price", entry_price),
+                            exit_price=exit_price_used,
+                            entry_time=entry_info.get("index", i),
+                            exit_time=i,
+                            pnl=net_pnl,
+                            pnl_pct=pnl_at_exit,
+                            entry_rsi=entry_info.get("rsi", rsi),
+                            exit_rsi=rsi,
+                            regime=regime_at_entry,
+                            reason=f"패턴손절({entry_info.get('pattern_type','')})"
+                        ))
+                        has_position = False
+                        partial_profit_taken = False
+                        trailing_stop_active = False
+                        best_pnl_pct = 0.0
+                        current_position_size = POSITION_SIZE_PERCENT
+                        equity = balance
+                        continue
             
             if is_long:
                 if price > highest_price:
@@ -288,7 +430,7 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
                         trailing_stop_active = True  # 트레일링 스톱 활성화
                         best_pnl_pct = pnl_pct  # 현재 수익률을 최고 수익률로 설정
                     
-                    # 강세장 롱: 익절 12%
+                    # 강세장 롱: 익절 4%
                     if pnl_pct >= BULLISH_PROFIT_TARGET:
                         remaining_pnl = pnl_pct / 100 * balance * current_position_size
                         fee = balance * current_position_size * FEE_RATE
@@ -317,7 +459,7 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
                         equity = balance
                         continue
                     
-                    # 손절 4%
+                    # 손절 2%
                     if pnl_pct <= -BULLISH_STOP_LOSS:
                         remaining_pnl = pnl_pct / 100 * balance * current_position_size
                         fee = balance * current_position_size * FEE_RATE
@@ -346,7 +488,7 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
                         equity = balance
                         continue
                     
-                    # 스탑로스 5% (가격 기준)
+                    # 스탑로스 (가격 기준)
                     stop_loss_price = entry_price * (1 - BULLISH_STOP_LOSS_PRICE / 100 / LEVERAGE)
                     if price <= stop_loss_price:
                         remaining_pnl = pnl_pct / 100 * balance * current_position_size
@@ -377,13 +519,40 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
                         continue
                 
                 elif regime_at_entry == "sideways":
-                    # 횡보장 롱: 진입 시점의 박스권 하단 이탈 시 즉시 손절
+                    # 횡보장 롱: 고점(상단) 근처에서 익절, 하단 이탈 시 손절
                     box_high_entry = entry_info.get("box_high", 0.0)
                     box_low_entry = entry_info.get("box_low", 0.0)
                     
                     if box_high_entry > 0 and box_low_entry > 0:
-                        # 진입 시점의 박스권 하단 이탈 시 즉시 손절 (하단보다 1% 이상 아래로 떨어져야 손절)
-                        box_low_threshold = box_low_entry * (1 - 0.01)  # 하단보다 1% 아래
+                        # 고점 근처 익절 (상단 2% 이내)
+                        box_high_threshold = box_high_entry * (1 - SIDEWAYS_BOX_TOP_MARGIN)
+                        if price >= box_high_threshold:
+                            remaining_pnl = pnl_pct / 100 * balance * current_position_size
+                            fee = balance * current_position_size * FEE_RATE
+                            net_pnl = remaining_pnl - fee
+                            balance += net_pnl
+                            trades.append(net_pnl)
+                            wins.append(net_pnl)
+                            trade_details.append(TradeDetail(
+                                side="LONG",
+                                entry_price=entry_info.get("entry_price", entry_price),
+                                exit_price=price,
+                                entry_time=entry_info.get("index", i),
+                                exit_time=i,
+                                pnl=net_pnl,
+                                pnl_pct=pnl_pct,
+                                entry_rsi=entry_info.get("rsi", rsi),
+                                exit_rsi=rsi,
+                                regime=regime_at_entry,
+                                reason="횡보 익절-고점근처"
+                            ))
+                            has_position = False
+                            partial_profit_taken = False
+                            current_position_size = POSITION_SIZE_PERCENT
+                            equity = balance
+                            continue
+                        # 하단 이탈 손절 (하단보다 1% 아래)
+                        box_low_threshold = box_low_entry * (1 - 0.01)
                         if price < box_low_threshold:
                             remaining_pnl = pnl_pct / 100 * balance * current_position_size
                             fee = balance * current_position_size * FEE_RATE
@@ -410,8 +579,8 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
                             equity = balance
                             continue
                     
-                    # 기본 손절 4% (박스권 이탈이 아닌 경우)
-                    if pnl_pct <= -4.0:
+                    # 기본 손절 2% (박스권 이탈이 아닌 경우)
+                    if pnl_pct <= -SIDEWAYS_STOP_LOSS:
                         remaining_pnl = pnl_pct / 100 * balance * current_position_size
                         fee = balance * current_position_size * FEE_RATE
                         net_pnl = remaining_pnl - fee
@@ -491,7 +660,7 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
                         trailing_stop_active = True  # 트레일링 스톱 활성화
                         best_pnl_pct = pnl_pct  # 현재 수익률을 최고 수익률로 설정
                     
-                    # 약세장 숏: 익절 12%
+                    # 약세장 숏: 익절 4%
                     if pnl_pct >= BEARISH_PROFIT_TARGET:
                         remaining_pnl = pnl_pct / 100 * balance * current_position_size
                         fee = balance * current_position_size * FEE_RATE
@@ -520,7 +689,7 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
                         equity = balance
                         continue
                     
-                    # 손절 4%
+                    # 손절 2%
                     if pnl_pct <= -BEARISH_STOP_LOSS:
                         remaining_pnl = pnl_pct / 100 * balance * current_position_size
                         fee = balance * current_position_size * FEE_RATE
@@ -549,7 +718,7 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
                         equity = balance
                         continue
                     
-                    # 스탑로스 5% (가격 기준)
+                    # 스탑로스 (가격 기준)
                     stop_loss_price = entry_price * (1 + BEARISH_STOP_LOSS_PRICE / 100 / LEVERAGE)
                     if price >= stop_loss_price:
                         remaining_pnl = pnl_pct / 100 * balance * current_position_size
@@ -580,13 +749,42 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
                         continue
                 
                 elif regime_at_entry == "sideways":
-                    # 횡보장 숏: 진입 시점의 박스권 상단 이탈 시 즉시 손절
+                    # 횡보장 숏: 저점(하단) 근처에서 익절, 상단 이탈 시 손절
                     box_high_entry = entry_info.get("box_high", 0.0)
                     box_low_entry = entry_info.get("box_low", 0.0)
                     
                     if box_high_entry > 0 and box_low_entry > 0:
-                        # 진입 시점의 박스권 상단 이탈 시 즉시 손절 (상단보다 1% 이상 위로 올라가야 손절)
-                        box_high_threshold = box_high_entry * (1 + 0.01)  # 상단보다 1% 위
+                        # 저점 근처 익절 (하단 2% 이내)
+                        box_low_threshold = box_low_entry * (1 + SIDEWAYS_BOX_BOTTOM_MARGIN)
+                        if price <= box_low_threshold:
+                            remaining_pnl = pnl_pct / 100 * balance * current_position_size
+                            fee = balance * current_position_size * FEE_RATE
+                            net_pnl = remaining_pnl - fee
+                            balance += net_pnl
+                            trades.append(net_pnl)
+                            wins.append(net_pnl)
+                            trade_details.append(TradeDetail(
+                                side="SHORT",
+                                entry_price=entry_info.get("entry_price", entry_price),
+                                exit_price=price,
+                                entry_time=entry_info.get("index", i),
+                                exit_time=i,
+                                pnl=net_pnl,
+                                pnl_pct=pnl_pct,
+                                entry_rsi=entry_info.get("rsi", rsi),
+                                exit_rsi=rsi,
+                                regime=regime_at_entry,
+                                reason="횡보 익절-저점근처"
+                            ))
+                            has_position = False
+                            partial_profit_taken = False
+                            trailing_stop_active = False
+                            best_pnl_pct = 0.0
+                            current_position_size = POSITION_SIZE_PERCENT
+                            equity = balance
+                            continue
+                        # 상단 이탈 손절 (상단보다 1% 위)
+                        box_high_threshold = box_high_entry * (1 + 0.01)
                         if price > box_high_threshold:
                                 remaining_pnl = pnl_pct / 100 * balance * current_position_size
                                 fee = balance * current_position_size * FEE_RATE
@@ -615,8 +813,8 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
                                 equity = balance
                                 continue
                     
-                    # 기본 손절 4% (박스권 이탈이 아닌 경우)
-                    if pnl_pct <= -4.0:
+                    # 기본 손절 2% (박스권 이탈이 아닌 경우)
+                    if pnl_pct <= -SIDEWAYS_STOP_LOSS:
                         remaining_pnl = pnl_pct / 100 * balance * current_position_size
                         fee = balance * current_position_size * FEE_RATE
                         net_pnl = remaining_pnl - fee
@@ -644,15 +842,8 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
                         equity = balance
                         continue
         
-        # 전략 신호 생성
-        ma_50 = float(row.get("ma_50", 0.0))
-        ma_100 = float(row.get("ma_100", 0.0))
-        # 박스권 판단을 위한 가격 히스토리
-        if i >= SIDEWAYS_BOX_PERIOD:
-            price_history_for_regime = close_prices[i - SIDEWAYS_BOX_PERIOD:i + 1].tolist()
-        else:
-            price_history_for_regime = close_prices[:i + 1].tolist()
-        regime = detect_market_regime(short_ma, long_ma, price, ma_50, ma_100, ma_params, price_history_for_regime)
+        # 전략 신호 생성 (regime은 5분봉 기반)
+        regime = current_regime
         
         # 박스권 판단을 위한 가격 히스토리 (성능 최적화: 슬라이싱 사용)
         if i >= SIDEWAYS_BOX_PERIOD:
@@ -660,7 +851,20 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
         else:
             price_history = close_prices[:i + 1].tolist()
         
-        # 새로운 전략 시그널 생성
+        # 일일 손실 한도: 날짜 변경 시 daily_start_balance 갱신
+        ts = row.get("timestamp")
+        current_date = ts.strftime("%Y-%m-%d") if hasattr(ts, "strftime") else str(ts)[:10] if ts is not None else ""
+        if current_date and daily_start_date != current_date:
+            daily_start_balance = balance
+            daily_start_date = current_date
+        
+        # 일일 손실 한도: 초과 시 진입 불가
+        daily_loss_pct = 0.0
+        if daily_start_balance > 0:
+            daily_loss_pct = (daily_start_balance - balance) / daily_start_balance * 100
+        daily_limit_hit = daily_loss_pct >= DAILY_LOSS_LIMIT_PCT
+        
+        # 기존 전략 시그널 생성
         signal = swing_strategy_signal(
             rsi_value=rsi,
             price=price,
@@ -672,9 +876,20 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
             price_history=price_history,
         )
         
+        # 차트 패턴 감지: 패턴+전략 방향 일치 시 패턴 TP/SL 적용
+        chart_pattern = None
+        if i >= chart_patterns.PATTERN_LOOKBACK and not has_position and not daily_limit_hit and (signal == "long" or signal == "short"):
+            highs_list = high_prices[i - chart_patterns.PATTERN_LOOKBACK:i + 1].tolist()
+            lows_list = low_prices[i - chart_patterns.PATTERN_LOOKBACK:i + 1].tolist()
+            closes_list = close_prices[i - chart_patterns.PATTERN_LOOKBACK:i + 1].tolist()
+            detected = detect_chart_pattern(highs_list, lows_list, closes_list, price)
+            if detected is not None:
+                pattern_side_ok = (signal == "long" and detected.side == "LONG") or (signal == "short" and detected.side == "SHORT")
+                if pattern_side_ok:
+                    chart_pattern = detected
+        
         # 진입/청산 처리
-        if signal == "long" and not has_position:
-            # 진입 시점의 박스권 저장
+        if signal == "long" and not has_position and not daily_limit_hit:
             box_high_entry = 0.0
             box_low_entry = 0.0
             if regime == "sideways" and len(price_history) >= SIDEWAYS_BOX_PERIOD:
@@ -698,8 +913,11 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
                 "box_high": box_high_entry,
                 "box_low": box_low_entry,
             }
-        elif signal == "short" and not has_position:
-            # 진입 시점의 박스권 저장
+            if chart_pattern is not None:
+                entry_info["pattern_type"] = chart_pattern.name
+                entry_info["pattern_target"] = chart_pattern.target_price
+                entry_info["pattern_stop"] = chart_pattern.stop_price
+        elif signal == "short" and not has_position and not daily_limit_hit:
             box_high_entry = 0.0
             box_low_entry = 0.0
             if regime == "sideways" and len(price_history) >= SIDEWAYS_BOX_PERIOD:
@@ -723,6 +941,10 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
                 "box_high": box_high_entry,
                 "box_low": box_low_entry,
             }
+            if chart_pattern is not None:
+                entry_info["pattern_type"] = chart_pattern.name
+                entry_info["pattern_target"] = chart_pattern.target_price
+                entry_info["pattern_stop"] = chart_pattern.stop_price
         elif signal == "flat" and has_position:
             # 전략 신호로 청산
             if is_long:

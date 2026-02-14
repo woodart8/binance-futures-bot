@@ -49,7 +49,30 @@ pip install -r requirements.txt
 ```text
 API_KEY=YOUR_BINANCE_FUTURES_API_KEY
 SECRET_KEY=YOUR_BINANCE_FUTURES_SECRET_KEY
+
+# 일일 리포트 이메일 (daily_report.py)
+EMAIL_TO=받을이메일@example.com
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=보내는이메일@gmail.com
+SMTP_PASSWORD=앱비밀번호
 ```
+
+### 일일 매매 결과 이메일 리포트
+
+한국시간 오전 9시마다 전날 매매 결과를 이메일로 전송:
+
+```bash
+# 즉시 전송 (테스트용)
+python daily_report.py
+
+# 매일 9시 자동 전송 (백그라운드 실행)
+python daily_report.py --schedule
+```
+
+또는 **Windows 작업 스케줄러**에서 `python daily_report.py` 를 매일 9:00에 실행하도록 등록.
+
+Gmail 사용 시: Google 계정 → 보안 → 2단계 인증 → 앱 비밀번호 생성 후 `SMTP_PASSWORD`에 입력.
 
 ### 우분투에서 24시간 돌리기 (예시)
 

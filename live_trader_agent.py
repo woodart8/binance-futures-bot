@@ -17,6 +17,7 @@ from typing import Optional
 import pandas as pd
 
 from config import (
+    DAILY_LOSS_LIMIT_PCT,
     LEVERAGE,
     POSITION_SIZE_PERCENT,
     RSI_PERIOD,
@@ -28,16 +29,24 @@ from config import (
     BULLISH_STOP_LOSS,
     BULLISH_STOP_LOSS_PRICE,
     BULLISH_EARLY_EXIT_RSI,
+    BULLISH_TRAILING_STOP_ACTIVATION,
+    BULLISH_TRAILING_STOP_PCT,
     BEARISH_PROFIT_TARGET,
     BEARISH_STOP_LOSS,
     BEARISH_STOP_LOSS_PRICE,
     BEARISH_EARLY_EXIT_RSI,
+    BEARISH_TRAILING_STOP_ACTIVATION,
+    BEARISH_TRAILING_STOP_PCT,
     SIDEWAYS_BOX_PERIOD,
+    SIDEWAYS_BOX_TOP_MARGIN,
+    SIDEWAYS_BOX_BOTTOM_MARGIN,
+    SIDEWAYS_STOP_LOSS,
     SYMBOL,
     TIMEFRAME,
 )
 from exchange_client import get_private_exchange
 from indicators import calculate_rsi, calculate_ma
+from chart_patterns import detect_chart_pattern, PATTERN_LOOKBACK
 from strategy_core import (
     MovingAverageParams,
     swing_strategy_signal,
@@ -82,11 +91,20 @@ def main() -> None:
     entry_price = 0.0
     entry_balance = 0.0
     entry_regime = ""
+    box_high_entry = 0.0
+    box_low_entry = 0.0
     highest_price = 0.0
     lowest_price = float("inf")
     partial_profit_taken = False
     trailing_stop_active = False
     best_pnl_pct = 0.0
+    pattern_type = ""
+    pattern_target = 0.0
+    pattern_stop = 0.0
+
+    # 일일 손실 한도 추적
+    daily_start_balance = 0.0
+    daily_start_date = ""
 
     last_candle_time = None
     ma_params = MovingAverageParams(
@@ -97,9 +115,14 @@ def main() -> None:
 
     try:
         while True:
-            # 충분한 데이터 확보
-            limit = max(RSI_PERIOD, MA_LONGEST_PERIOD) + 100
-            df = fetch_ohlcv(exchange, limit=limit)
+            try:
+                # 충분한 데이터 확보
+                limit = max(RSI_PERIOD, MA_LONGEST_PERIOD) + 100
+                df = fetch_ohlcv(exchange, limit=limit)
+            except Exception as e:
+                log(f"OHLCV 조회 실패: {e}", "ERROR")
+                time.sleep(60)
+                continue
             
             # 지표 계산
             df["rsi"] = calculate_rsi(df["close"], RSI_PERIOD)
@@ -121,9 +144,14 @@ def main() -> None:
 
             if last_candle_time is None:
                 last_candle_time = latest_time
+                try:
+                    bal = get_balance_usdt(exchange)
+                except Exception:
+                    bal = 0.0
+                log(f"[시작] 가격={price:.2f} 잔고={bal:.2f}")
             elif latest_time > last_candle_time:
 
-                # 시장 상태 판단
+                # regime: 5분봉 기반 판단
                 price_history = df["close"].tail(SIDEWAYS_BOX_PERIOD + 1).tolist() if len(df) >= SIDEWAYS_BOX_PERIOD else df["close"].tolist()
                 regime = detect_market_regime(short_ma, long_ma, price, ma_50, ma_100, ma_params, price_history)
 
@@ -132,7 +160,21 @@ def main() -> None:
                 if has_position:
                     pnl_pct = (price - entry_price) / entry_price * LEVERAGE * 100 if is_long else (entry_price - price) / entry_price * LEVERAGE * 100
                     
-                    if is_long:
+                    # 차트 패턴 진입 시 패턴 정석 익절/손절만 적용 (config 퍼센트 무시)
+                    if pattern_target > 0 and pattern_stop > 0:
+                        if is_long:
+                            if price >= pattern_target:
+                                signal = "flat"
+                            elif price <= pattern_stop:
+                                signal = "flat"
+                        else:  # SHORT
+                            if price <= pattern_target:
+                                signal = "flat"
+                            elif price >= pattern_stop:
+                                signal = "flat"
+                        # 패턴 대기 중이면 signal 그대로, regime 기반 로직 스킵
+                    
+                    if signal is None and not (pattern_target > 0 and pattern_stop > 0) and is_long:
                         if price > highest_price:
                             highest_price = price
                         
@@ -144,11 +186,10 @@ def main() -> None:
                             # 트레일링 스톱
                             elif pnl_pct > best_pnl_pct:
                                 best_pnl_pct = pnl_pct
-                            elif pnl_pct >= 8.0:
+                            elif pnl_pct >= BULLISH_TRAILING_STOP_ACTIVATION:
                                 trailing_stop_active = True
-                                if trailing_stop_active and best_pnl_pct - pnl_pct >= 4.0:
+                                if trailing_stop_active and best_pnl_pct - pnl_pct >= BULLISH_TRAILING_STOP_PCT:
                                     signal = "flat"
-                            # 부분 익절 (실거래에서는 부분 청산 복잡하므로 생략)
                             # 익절/손절
                             elif pnl_pct >= BULLISH_PROFIT_TARGET:
                                 signal = "flat"
@@ -158,7 +199,19 @@ def main() -> None:
                                 stop_loss_price = entry_price * (1 - BULLISH_STOP_LOSS_PRICE / 100 / LEVERAGE)
                                 if price <= stop_loss_price:
                                     signal = "flat"
-                    else:  # SHORT
+                        elif entry_regime == "sideways":
+                            # 횡보장 롱: 고점 근처 익절, 하단 이탈 손절, 기본 손절 2%
+                            if box_high_entry > 0 and box_low_entry > 0:
+                                box_high_threshold = box_high_entry * (1 - SIDEWAYS_BOX_TOP_MARGIN)
+                                if price >= box_high_threshold:
+                                    signal = "flat"
+                                else:
+                                    box_low_threshold = box_low_entry * (1 - 0.01)
+                                    if price < box_low_threshold:
+                                        signal = "flat"
+                            if signal is None and pnl_pct <= -SIDEWAYS_STOP_LOSS:
+                                signal = "flat"
+                    elif signal is None and not (pattern_target > 0 and pattern_stop > 0) and not is_long:  # SHORT
                         if price < lowest_price:
                             lowest_price = price
                         
@@ -170,11 +223,10 @@ def main() -> None:
                             # 트레일링 스톱
                             elif pnl_pct > best_pnl_pct:
                                 best_pnl_pct = pnl_pct
-                            elif pnl_pct >= 8.0:
+                            elif pnl_pct >= BEARISH_TRAILING_STOP_ACTIVATION:
                                 trailing_stop_active = True
-                                if trailing_stop_active and best_pnl_pct - pnl_pct >= 4.0:
+                                if trailing_stop_active and best_pnl_pct - pnl_pct >= BEARISH_TRAILING_STOP_PCT:
                                     signal = "flat"
-                            # 부분 익절 (실거래에서는 부분 청산 복잡하므로 생략)
                             # 익절/손절
                             elif pnl_pct >= BEARISH_PROFIT_TARGET:
                                 signal = "flat"
@@ -184,6 +236,18 @@ def main() -> None:
                                 stop_loss_price = entry_price * (1 + BEARISH_STOP_LOSS_PRICE / 100 / LEVERAGE)
                                 if price >= stop_loss_price:
                                     signal = "flat"
+                        elif entry_regime == "sideways":
+                            # 횡보장 숏: 저점 근처 익절, 상단 이탈 손절, 기본 손절 2%
+                            if box_high_entry > 0 and box_low_entry > 0:
+                                box_low_threshold = box_low_entry * (1 + SIDEWAYS_BOX_BOTTOM_MARGIN)
+                                if price <= box_low_threshold:
+                                    signal = "flat"
+                                else:
+                                    box_high_threshold = box_high_entry * (1 + 0.01)
+                                    if price > box_high_threshold:
+                                        signal = "flat"
+                            if signal is None and pnl_pct <= -SIDEWAYS_STOP_LOSS:
+                                signal = "flat"
                 else:
                     # 진입 신호 생성 (backtest.py와 동일)
                     signal = swing_strategy_signal(
@@ -199,11 +263,33 @@ def main() -> None:
 
 
                 # 잔고 조회
-                balance = get_balance_usdt(exchange)
+                try:
+                    balance = get_balance_usdt(exchange)
+                except Exception as e:
+                    log(f"잔고 조회 실패: {e}", "ERROR")
+                    time.sleep(60)
+                    continue
+
+                # 일일 손실 한도: 날짜 변경 시 daily_start_balance 갱신
+                current_date = latest_time.strftime("%Y-%m-%d") if hasattr(latest_time, "strftime") else str(latest_time)[:10]
+                if daily_start_date != current_date:
+                    daily_start_balance = balance
+                    daily_start_date = current_date
+
+                # 일일 손실 한도: 초과 시 진입 불가
+                daily_loss_pct = 0.0
+                if daily_start_balance > 0:
+                    daily_loss_pct = (daily_start_balance - balance) / daily_start_balance * 100
+                daily_limit_hit = daily_loss_pct >= DAILY_LOSS_LIMIT_PCT
 
                 if has_position and signal == "flat":
                     # 포지션 종료
-                    positions = exchange.fetch_positions([SYMBOL])
+                    try:
+                        positions = exchange.fetch_positions([SYMBOL])
+                    except Exception as e:
+                        log(f"포지션 조회 실패: {e}", "ERROR")
+                        time.sleep(60)
+                        continue
                     contracts = 0.0
                     side_to_close = "long" if is_long else "short"
                     for pos in positions:
@@ -212,18 +298,29 @@ def main() -> None:
                             break
 
                     if contracts > 0:
-                        if is_long:
-                            order = exchange.create_market_sell_order(
-                                SYMBOL, contracts, {"reduceOnly": True}
-                            )
-                        else:
-                            order = exchange.create_market_buy_order(
-                                SYMBOL, contracts, {"reduceOnly": True}
-                            )
-                            log(f"{'LONG' if is_long else 'SHORT'} 종료")
+                        try:
+                            if is_long:
+                                order = exchange.create_market_sell_order(
+                                    SYMBOL, contracts, {"reduceOnly": True}
+                                )
+                            else:
+                                order = exchange.create_market_buy_order(
+                                    SYMBOL, contracts, {"reduceOnly": True}
+                                )
+                            # 주문 실행 검증
+                            order_status = order.get("status", "") if order else ""
+                            side_str = "LONG" if is_long else "SHORT"
+                            log(f"{side_str} 청산 | 진입={entry_price:.2f} 청산={price:.2f}")
+                        except Exception as e:
+                            log(f"청산 주문 실패: {e}", "ERROR")
+                            continue  # 상태 유지, 다음 루프에서 재시도
 
                     # 손익 계산
-                    new_balance = get_balance_usdt(exchange)
+                    try:
+                        new_balance = get_balance_usdt(exchange)
+                    except Exception as e:
+                        log(f"청산 후 잔고 조회 실패: {e}", "ERROR")
+                        new_balance = balance
                     pnl = new_balance - entry_balance
                     log_trade(
                         side="LONG" if is_long else "SHORT",
@@ -237,41 +334,78 @@ def main() -> None:
                     is_long = False
                     entry_price = 0.0
                     entry_regime = ""
+                    box_high_entry = 0.0
+                    box_low_entry = 0.0
                     highest_price = 0.0
                     lowest_price = float("inf")
                     partial_profit_taken = False
                     trailing_stop_active = False
                     best_pnl_pct = 0.0
+                    pattern_type = ""
+                    pattern_target = 0.0
+                    pattern_stop = 0.0
                     entry_balance = new_balance
 
                 elif (not has_position) and (signal == "long" or signal == "short"):
-                    # 진입
-                    order_usdt = balance * POSITION_SIZE_PERCENT
-                    if order_usdt >= 5.0:
-                        ticker = exchange.fetch_ticker(SYMBOL)
-                        mkt_price = float(ticker["last"])
-                        amount = order_usdt / mkt_price
-                        
-                        if signal == "long":
-                            order = exchange.create_market_buy_order(SYMBOL, amount)
-                            log("LONG 진입")
-                            has_position = True
-                            is_long = True
-                            entry_price = mkt_price
-                            highest_price = mkt_price
-                        else:  # short
-                            order = exchange.create_market_sell_order(SYMBOL, amount)
-                            log("SHORT 진입")
-                            has_position = True
-                            is_long = False
-                            entry_price = mkt_price
-                            lowest_price = mkt_price
-                        
-                        entry_regime = regime
-                        entry_balance = balance
-                        partial_profit_taken = False
-                        trailing_stop_active = False
-                        best_pnl_pct = 0.0
+                    if daily_limit_hit:
+                        log(f"[진입생략] 일일손실한도 {daily_loss_pct:.1f}%")
+                    else:
+                        # 진입
+                        order_usdt = balance * POSITION_SIZE_PERCENT
+                        if order_usdt >= 5.0:
+                            try:
+                                ticker = exchange.fetch_ticker(SYMBOL)
+                                mkt_price = float(ticker["last"])
+                                amount = order_usdt / mkt_price
+                                
+                                # 차트 패턴 감지 (같은 방향 시그널일 때만)
+                                pattern_info = None
+                                if len(df) >= PATTERN_LOOKBACK:
+                                    highs = df["high"].tolist()
+                                    lows = df["low"].tolist()
+                                    closes = df["close"].tolist()
+                                    pattern_info = detect_chart_pattern(highs, lows, closes, mkt_price)
+                                
+                                if signal == "long":
+                                    order = exchange.create_market_buy_order(SYMBOL, amount)
+                                    pt, ptg, pst = ("", 0.0, 0.0) if not (pattern_info and pattern_info.side == "LONG") else (pattern_info.name, pattern_info.target_price, pattern_info.stop_price)
+                                    log(f"LONG 진입 | 가격={mkt_price:.2f} 잔고={balance:.2f}" + (f" 패턴={pt}" if pt else ""))
+                                    has_position, is_long = True, True
+                                    entry_price, highest_price = mkt_price, mkt_price
+                                    pattern_type, pattern_target, pattern_stop = pt, ptg, pst
+                                else:
+                                    order = exchange.create_market_sell_order(SYMBOL, amount)
+                                    pt, ptg, pst = ("", 0.0, 0.0) if not (pattern_info and pattern_info.side == "SHORT") else (pattern_info.name, pattern_info.target_price, pattern_info.stop_price)
+                                    log(f"SHORT 진입 | 가격={mkt_price:.2f} 잔고={balance:.2f}" + (f" 패턴={pt}" if pt else ""))
+                                    has_position, is_long = True, False
+                                    entry_price, lowest_price = mkt_price, mkt_price
+                                    pattern_type, pattern_target, pattern_stop = pt, ptg, pst
+                                
+                                entry_regime = regime
+                                entry_balance = balance
+                                partial_profit_taken = False
+                                trailing_stop_active = False
+                                best_pnl_pct = 0.0
+                                # 횡보장 진입 시 박스권 저장
+                                box_high_entry = 0.0
+                                box_low_entry = 0.0
+                                if regime == "sideways" and len(price_history) >= SIDEWAYS_BOX_PERIOD:
+                                    box_high_entry = max(price_history[-SIDEWAYS_BOX_PERIOD:])
+                                    box_low_entry = min(price_history[-SIDEWAYS_BOX_PERIOD:])
+                            except Exception as e:
+                                log(f"진입 주문 실패: {e}", "ERROR")
+
+                # 5분 간격 상태 로그
+                pos_status = "LONG" if has_position and is_long else ("SHORT" if has_position else "NONE")
+                try:
+                    bal = get_balance_usdt(exchange) if has_position else balance
+                except Exception:
+                    bal = balance
+                unrealized = ""
+                if has_position:
+                    pnl_pct = (price - entry_price) / entry_price * LEVERAGE * 100 if is_long else (entry_price - price) / entry_price * LEVERAGE * 100
+                    unrealized = f" 미실현={pnl_pct:+.2f}%"
+                log(f"[5분] {pos_status} | 가격={price:.2f} 잔고={bal:.2f}{unrealized}")
 
                 last_candle_time = latest_time
 
