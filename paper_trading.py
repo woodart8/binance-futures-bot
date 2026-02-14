@@ -72,6 +72,27 @@ from config import MA_SHORT_PERIOD, MA_LONG_PERIOD
 
 # 체크 주기 (초) - 5분봉 기준 새 캔들 시에만 전략/상태 로그
 CHECK_INTERVAL = 30
+# 진입/청산 이유 로그 주기 (5분)
+REASON_LOG_INTERVAL = 300
+_last_reason_log_time: float = 0.0
+_daily_limit_logged_date: str = ""
+
+
+def _log_daily_limit_once(current_date: str, daily_loss_pct: float) -> None:
+    """일일손실한도 로그는 당일 1번만."""
+    global _daily_limit_logged_date
+    if _daily_limit_logged_date != current_date:
+        _daily_limit_logged_date = current_date
+        log(f"[진입안함] 일일손실한도 {daily_loss_pct:.1f}% 도달")
+
+
+def _should_log_reason() -> bool:
+    import time
+    global _last_reason_log_time
+    if time.time() - _last_reason_log_time >= REASON_LOG_INTERVAL:
+        _last_reason_log_time = time.time()
+        return True
+    return False
 
 
 def log(message: str, level: str = "INFO") -> None:
@@ -298,6 +319,70 @@ def open_position(
     log(f"{side} 진입 | {reason} | 가격={price:.2f} 잔고={state.balance:.2f}")
 
 
+def _reason_no_entry(regime: str, signal: str, rsi: float, price: float, short_ma: float, long_ma: float) -> str:
+    """진입 안 하는 이유 (간단)"""
+    if regime == "bullish":
+        if signal != "long":
+            parts = []
+            if rsi > 50:
+                parts.append(f"RSI{rsi:.0f}>50")
+            if price <= short_ma:
+                parts.append("가격<=MA단기")
+            if price <= long_ma:
+                parts.append("가격<=MA장기")
+            return " | ".join(parts) if parts else "조건미충족"
+    elif regime == "bearish":
+        if signal != "short":
+            parts = []
+            if rsi < 52:
+                parts.append(f"RSI{rsi:.0f}<51")
+            if price >= short_ma:
+                parts.append("가격>=MA단기")
+            if price >= long_ma:
+                parts.append("가격>=MA장기")
+            return " | ".join(parts) if parts else "조건미충족"
+    elif regime == "sideways":
+        return f"시그널={signal} (박스권/RSI조건)"
+    return f"시그널={signal} regime={regime}"
+
+
+def _reason_no_exit_strategy(regime: str, is_long: bool, rsi: float, price: float, short_ma: float) -> str:
+    """전략 기준 청산 안 하는 이유 (flat 조건: bullish롱 RSI≥65 또는 가격<MA, bearish숏 RSI≤35 또는 가격>MA)"""
+    if regime == "bullish" and is_long:
+        parts = []
+        if rsi < 65:
+            parts.append(f"RSI{rsi:.0f}<65(과매수아님)")
+        if price >= short_ma:
+            parts.append("가격>=MA단기(하락아님)")
+        return " | ".join(parts) if parts else "청산조건미충족"
+    elif regime == "bearish" and not is_long:
+        parts = []
+        if rsi > 35:
+            parts.append(f"RSI{rsi:.0f}>35(과매도아님)")
+        if price <= short_ma:
+            parts.append("가격<=MA단기(반등아님)")
+        return " | ".join(parts) if parts else "청산조건미충족"
+    return f"regime={regime} hold"
+
+
+def _reason_no_exit_scalp(state: PaperState, pnl_pct: float, side: str, current_price: float) -> str:
+    """손절/익절 기준 청산 안 하는 이유"""
+    regime = state.entry_regime
+    if side == "LONG":
+        if regime == "bullish":
+            parts = [f"익절{BULLISH_PROFIT_TARGET}%미도달(pnl={pnl_pct:.1f}%)", f"손절{BULLISH_STOP_LOSS}%미도달"]
+            return " | ".join(parts)
+        elif regime == "sideways":
+            return f"손절{SIDEWAYS_STOP_LOSS}%미도달 | 박스권대기"
+    else:
+        if regime == "bearish":
+            parts = [f"익절{BEARISH_PROFIT_TARGET}%미도달(pnl={pnl_pct:.1f}%)", f"손절{BEARISH_STOP_LOSS}%미도달"]
+            return " | ".join(parts)
+        elif regime == "sideways":
+            return f"손절{SIDEWAYS_STOP_LOSS}%미도달 | 박스권대기"
+    return f"regime={regime} TP/SL대기"
+
+
 def check_scalp_stop_loss_and_profit(state: PaperState, current_price: float, candle: pd.Series) -> bool:
     """
     스캘핑용 손절, 수익 실현, 트레일링 스톱 체크.
@@ -317,6 +402,8 @@ def check_scalp_stop_loss_and_profit(state: PaperState, current_price: float, ca
             if current_price <= state.pattern_stop:
                 close_position(state, candle, "LONG", f"패턴손절({state.pattern_type})")
                 return True
+            if _should_log_reason():
+                log(f"[손절/익절청산안함] 패턴 익절/손절 대기 중 ({state.pattern_type})")
             return False  # 패턴 대기 중, config 기반 로직 스킵
         
         # 최고가 업데이트
@@ -418,6 +505,8 @@ def check_scalp_stop_loss_and_profit(state: PaperState, current_price: float, ca
             if current_price >= state.pattern_stop:
                 close_position(state, candle, "SHORT", f"패턴손절({state.pattern_type})")
                 return True
+            if _should_log_reason():
+                log(f"[손절/익절청산안함] 패턴 익절/손절 대기 중 ({state.pattern_type})")
             return False  # 패턴 대기 중, config 기반 로직 스킵
         
         # 최저가 업데이트
@@ -510,6 +599,16 @@ def check_scalp_stop_loss_and_profit(state: PaperState, current_price: float, ca
                 close_position(state, candle, "SHORT", f"최대 보유 시간 초과 ({hold_time_min:.0f}분)")
                 return True
 
+    # TP/SL 미도달 시 5분마다 청산 안 하는 이유 로그
+    if state.has_long_position or state.has_short_position:
+        side = "LONG" if state.has_long_position else "SHORT"
+        if side == "LONG":
+            pnl_pct = (current_price - state.entry_price) / state.entry_price * LEVERAGE * 100
+        else:
+            pnl_pct = (state.entry_price - current_price) / state.entry_price * LEVERAGE * 100
+        if _should_log_reason():
+            reason = _reason_no_exit_scalp(state, pnl_pct, side, current_price)
+            log(f"[손절/익절청산안함] {reason}")
     return False
 
 
@@ -598,7 +697,7 @@ def apply_strategy_on_candle(
     # 전략 시그널에 따른 진입/청산 처리
     if signal == "long" and not has_position:
         if daily_limit_hit:
-            log(f"[진입생략] 일일손실한도 {daily_loss_pct:.1f}%")
+            _log_daily_limit_once(current_date, daily_loss_pct)
         else:
             pt, ptg, pst = "", 0.0, 0.0
             if pattern_info and pattern_info.side == "LONG":
@@ -612,7 +711,7 @@ def apply_strategy_on_candle(
             )
     elif signal == "short" and not has_position:
         if daily_limit_hit:
-            log(f"[진입생략] 일일손실한도 {daily_loss_pct:.1f}%")
+            _log_daily_limit_once(current_date, daily_loss_pct)
         else:
             pt, ptg, pst = "", 0.0, 0.0
             if pattern_info and pattern_info.side == "SHORT":
@@ -627,6 +726,18 @@ def apply_strategy_on_candle(
     elif signal == "flat" and has_position:
         side = "LONG" if is_long else "SHORT"
         close_position(state, candle, side, f"스윙청산({regime_kr})")
+    else:
+        # 5분마다 진입/전략청산 안 하는 이유 로그
+        if _should_log_reason():
+            if not has_position:
+                if daily_limit_hit:
+                    _log_daily_limit_once(current_date, daily_loss_pct)
+                else:
+                    reason = _reason_no_entry(regime, signal, rsi, price, short_ma, long_ma)
+                    log(f"[진입안함] {reason}")
+            elif has_position and signal == "hold":
+                reason = _reason_no_exit_strategy(regime, is_long, rsi, price, short_ma)
+                log(f"[전략청산안함] {reason}")
     
     # 평가손익 계산 (손절/수익 실현은 별도 함수에서 처리)
     if state.has_long_position:
