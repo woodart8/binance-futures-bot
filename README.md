@@ -60,17 +60,19 @@ SMTP_PASSWORD=앱비밀번호
 
 ### 일일 매매 결과 이메일 리포트
 
-한국시간 오전 9시마다 전날 매매 결과를 이메일로 전송:
+전날 매매 결과를 이메일로 전송:
 
 ```bash
-# 즉시 전송 (테스트용)
 python daily_report.py
-
-# 매일 9시 자동 전송 (백그라운드 실행)
-python daily_report.py --schedule
 ```
 
-또는 **Windows 작업 스케줄러**에서 `python daily_report.py` 를 매일 9:00에 실행하도록 등록.
+**스케줄 등록 (Ubuntu crontab):**
+```bash
+# 매일 09:00 (한국시간)에 실행
+0 9 * * * cd /path/to/binance-futures-bot && .venv/bin/python daily_report.py
+```
+
+**Windows:** 작업 스케줄러에서 `python daily_report.py` 를 매일 9:00에 실행하도록 등록.
 
 Gmail 사용 시: Google 계정 → 보안 → 2단계 인증 → 앱 비밀번호 생성 후 `SMTP_PASSWORD`에 입력.
 

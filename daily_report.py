@@ -1,22 +1,20 @@
 """
-일일 매매 결과 리포트 - 한국시간 오전 9시에 이메일로 전송.
+일일 매매 결과 리포트 - 이메일로 전송.
 
-실행 방법:
-1. 즉시 전송: python daily_report.py
-2. 매일 9시 자동 전송: python daily_report.py --schedule
+실행: python daily_report.py
+스케줄: crontab 등으로 매일 09:00 (한국시간)에 실행하세요.
 
 .env 설정 필요:
   EMAIL_TO=받을이메일@example.com
-  SMTP_HOST=smtp.gmail.com
+  SMTP_HOST=smtp.gmail.com (또는 smtp.naver.com)
   SMTP_PORT=587
-  SMTP_USER=보내는이메일@gmail.com
-  SMTP_PASSWORD=앱비밀번호
+  SMTP_USER=보내는이메일
+  SMTP_PASSWORD=비밀번호
 """
 
 import ast
 import csv
 import smtplib
-import sys
 from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -174,26 +172,5 @@ def run_report() -> bool:
     return send_email(subject, html)
 
 
-def run_scheduler():
-    """매일 한국시간 9시에 리포트 전송 (스케줄 모드)"""
-    try:
-        from apscheduler.schedulers.blocking import BlockingScheduler
-        from apscheduler.triggers.cron import CronTrigger
-    except ImportError:
-        print("[ERROR] 스케줄러 사용 시: pip install apscheduler")
-        return
-
-    def job():
-        run_report()
-
-    scheduler = BlockingScheduler(timezone=KST)
-    scheduler.add_job(job, CronTrigger(hour=9, minute=0, timezone=KST))
-    print("[INFO] 매일 09:00 (한국시간)에 리포트 전송 예약됨. 종료하려면 Ctrl+C")
-    scheduler.start()
-
-
 if __name__ == "__main__":
-    if "--schedule" in sys.argv:
-        run_scheduler()
-    else:
-        run_report()
+    run_report()
