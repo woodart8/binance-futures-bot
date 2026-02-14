@@ -1,0 +1,94 @@
+"""횡보/중립장 TP/SL 청산."""
+
+from typing import Optional
+
+from config import (
+    SIDEWAYS_STOP_LOSS,
+    SIDEWAYS_PROFIT_TARGET,
+    SIDEWAYS_STOP_LOSS_PRICE,
+    SIDEWAYS_BOX_EXIT_MARGIN_PCT,
+    NEUTRAL_STOP_LOSS,
+    NEUTRAL_PROFIT_TARGET,
+    NEUTRAL_STOP_LOSS_PRICE,
+    LEVERAGE,
+)
+
+EXIT_REASON_DISPLAY = {
+    "횡보_익절": "횡보 익절",
+    "중립_익절": "중립 익절",
+    "박스권_하단이탈": "박스권 하단 이탈",
+    "박스권_상단이탈": "박스권 상단 이탈",
+    "손절_횡보": "손절",
+    "손절_중립": "손절",
+    "스탑로스_횡보": "스탑로스",
+    "스탑로스_중립": "스탑로스",
+}
+
+
+def _check_exit(
+    is_long: bool,
+    pnl_pct: float,
+    price: float,
+    entry_price: float,
+    box_high: float,
+    box_low: float,
+    regime: str,
+) -> Optional[str]:
+    is_neutral = regime == "neutral"
+    sl = NEUTRAL_STOP_LOSS if is_neutral else SIDEWAYS_STOP_LOSS
+    tp = NEUTRAL_PROFIT_TARGET if is_neutral else SIDEWAYS_PROFIT_TARGET
+    sl_price = NEUTRAL_STOP_LOSS_PRICE if is_neutral else SIDEWAYS_STOP_LOSS_PRICE
+    reason_suffix = "_중립" if is_neutral else "_횡보"
+
+    if pnl_pct <= -sl:
+        return f"손절{reason_suffix}"
+    stop_pct = sl_price / 100 / LEVERAGE
+    if is_long:
+        stop = entry_price * (1 - stop_pct)
+        if price <= stop:
+            return f"스탑로스{reason_suffix}"
+        if not is_neutral and box_high > box_low:
+            m = SIDEWAYS_BOX_EXIT_MARGIN_PCT / 100
+            if price < box_low * (1 - m):
+                return "박스권_하단이탈"
+    else:
+        stop = entry_price * (1 + stop_pct)
+        if price >= stop:
+            return f"스탑로스{reason_suffix}"
+        if not is_neutral and box_high > box_low:
+            m = SIDEWAYS_BOX_EXIT_MARGIN_PCT / 100
+            if price > box_high * (1 + m):
+                return "박스권_상단이탈"
+    if pnl_pct >= tp:
+        return "중립_익절" if is_neutral else "횡보_익절"
+    return None
+
+
+def check_long_exit(
+    regime: str,
+    pnl_pct: float,
+    rsi: float,
+    price: float,
+    entry_price: float,
+    best_pnl_pct: float,
+    box_high: float = 0.0,
+    box_low: float = 0.0,
+) -> Optional[str]:
+    return _check_exit(True, pnl_pct, price, entry_price, box_high, box_low, regime)
+
+
+def check_short_exit(
+    regime: str,
+    pnl_pct: float,
+    rsi: float,
+    price: float,
+    entry_price: float,
+    best_pnl_pct: float,
+    box_high: float = 0.0,
+    box_low: float = 0.0,
+) -> Optional[str]:
+    return _check_exit(False, pnl_pct, price, entry_price, box_high, box_low, regime)
+
+
+def reason_to_display_message(reason: str, is_long: bool) -> str:
+    return EXIT_REASON_DISPLAY.get(reason, reason)

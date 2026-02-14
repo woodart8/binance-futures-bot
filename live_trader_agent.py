@@ -1,22 +1,12 @@
-"""
-실거래 에이전트.
-
-- 5분마다 바이낸스 선물 USDS-M 5분봉을 조회하고,
-- backtest.py와 동일한 swing_strategy_signal 전략에 따라 진입/청산 신호가 나면 실제 주문을 전송한다.
-- 각 트레이드는 `trades_log.csv` 에 기록된다.
-
-주의:
-- 이 파일은 실제 주문을 발생시킨다.
-- .env 에 API_KEY, SECRET_KEY 가 올바르게 설정되어 있어야 한다.
-"""
+"""실거래 에이전트. .env에 API_KEY, SECRET_KEY 필요."""
 
 import time
-from datetime import datetime
 from typing import Optional
 
 import pandas as pd
 
 from config import (
+    CONSECUTIVE_LOSS_LIMIT,
     DAILY_LOSS_LIMIT_PCT,
     LEVERAGE,
     POSITION_SIZE_PERCENT,
@@ -25,49 +15,22 @@ from config import (
     MA_LONG_PERIOD,
     MA_MID_PERIOD,
     MA_LONGEST_PERIOD,
-    BULLISH_PROFIT_TARGET,
-    BULLISH_STOP_LOSS,
-    BULLISH_STOP_LOSS_PRICE,
-    BULLISH_EARLY_EXIT_RSI,
-    BULLISH_TRAILING_STOP_ACTIVATION,
-    BULLISH_TRAILING_STOP_PCT,
-    BEARISH_PROFIT_TARGET,
-    BEARISH_STOP_LOSS,
-    BEARISH_STOP_LOSS_PRICE,
-    BEARISH_EARLY_EXIT_RSI,
-    BEARISH_TRAILING_STOP_ACTIVATION,
-    BEARISH_TRAILING_STOP_PCT,
     SIDEWAYS_BOX_PERIOD,
-    SIDEWAYS_BOX_TOP_MARGIN,
-    SIDEWAYS_BOX_BOTTOM_MARGIN,
-    SIDEWAYS_STOP_LOSS,
     SYMBOL,
     TIMEFRAME,
+    REGIME_LOOKBACK_15M,
+    MACD_FAST,
+    MACD_SLOW,
+    MACD_SIGNAL,
 )
 from exchange_client import get_private_exchange
-from indicators import calculate_rsi, calculate_ma
+from data import fetch_ohlcv, compute_regime_15m
+from indicators import calculate_rsi, calculate_ma, calculate_macd
 from chart_patterns import detect_chart_pattern, PATTERN_LOOKBACK
-from strategy_core import (
-    MovingAverageParams,
-    swing_strategy_signal,
-    detect_market_regime,
-)
+from strategy_core import REGIME_KR, swing_strategy_signal
+from exit_logic import check_long_exit, check_short_exit
 from trade_logger import log_trade
-
-
-def log(message: str, level: str = "INFO") -> None:
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{ts}] [{level}] {message}")
-
-
-def fetch_ohlcv(exchange, limit: int = 200) -> pd.DataFrame:
-    ohlcv = exchange.fetch_ohlcv(SYMBOL, TIMEFRAME, limit=limit)
-    df = pd.DataFrame(
-        ohlcv,
-        columns=["timestamp", "open", "high", "low", "close", "volume"],
-    )
-    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-    return df
+from logger import log
 
 
 def get_balance_usdt(exchange) -> float:
@@ -95,29 +58,24 @@ def main() -> None:
     box_low_entry = 0.0
     highest_price = 0.0
     lowest_price = float("inf")
-    partial_profit_taken = False
     trailing_stop_active = False
     best_pnl_pct = 0.0
     pattern_type = ""
     pattern_target = 0.0
     pattern_stop = 0.0
 
-    # 일일 손실 한도 추적
+    # 일일 손실 한도 / 연속 손실 추적
     daily_start_balance = 0.0
     daily_start_date = ""
+    consecutive_loss_count = 0
 
     last_candle_time = None
-    ma_params = MovingAverageParams(
-        short_period=MA_SHORT_PERIOD,
-        long_period=MA_LONG_PERIOD,
-        trend_threshold=0.005,
-    )
 
     try:
         while True:
             try:
-                # 충분한 데이터 확보
-                limit = max(RSI_PERIOD, MA_LONGEST_PERIOD) + 100
+                # 충분한 데이터 확보 (15분봉 24시간 = 96*3 = 288개 5분봉 필요)
+                limit = max(RSI_PERIOD, MA_LONGEST_PERIOD, REGIME_LOOKBACK_15M * 3) + 100
                 df = fetch_ohlcv(exchange, limit=limit)
             except Exception as e:
                 log(f"OHLCV 조회 실패: {e}", "ERROR")
@@ -126,6 +84,9 @@ def main() -> None:
             
             # 지표 계산
             df["rsi"] = calculate_rsi(df["close"], RSI_PERIOD)
+            macd_line, signal_line, _ = calculate_macd(df["close"], MACD_FAST, MACD_SLOW, MACD_SIGNAL)
+            df["macd_line"] = macd_line
+            df["macd_signal"] = signal_line
             df["ma_short"] = calculate_ma(df["close"], MA_SHORT_PERIOD)
             df["ma_long"] = calculate_ma(df["close"], MA_LONG_PERIOD)
             df["ma_50"] = calculate_ma(df["close"], MA_MID_PERIOD)
@@ -151,9 +112,14 @@ def main() -> None:
                 log(f"[시작] 가격={price:.2f} 잔고={bal:.2f}")
             elif latest_time > last_candle_time:
 
-                # regime: 5분봉 기반 판단
+                # regime: 15분봉 24시간 기준 (MA 정배열/역배열, 박스권)
+                rsi_15m, macd_line_15m, macd_signal_15m = None, None, None
+                if len(df) >= REGIME_LOOKBACK_15M * 3:
+                    regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, macd_line_15m, macd_signal_15m = compute_regime_15m(df, price)
+                else:
+                    regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m = "neutral", 0.0, 0.0, 0.0, 0.0, []
+                # 진입/청산용 price_history: 5분봉 (횡보 시 regime_*로 15분봉 전달)
                 price_history = df["close"].tail(SIDEWAYS_BOX_PERIOD + 1).tolist() if len(df) >= SIDEWAYS_BOX_PERIOD else df["close"].tolist()
-                regime = detect_market_regime(short_ma, long_ma, price, ma_50, ma_100, ma_params, price_history)
 
                 # 손절/수익 실현 체크 (backtest.py와 동일한 로직)
                 signal = None
@@ -177,88 +143,64 @@ def main() -> None:
                     if signal is None and not (pattern_target > 0 and pattern_stop > 0) and is_long:
                         if price > highest_price:
                             highest_price = price
-                        
-                        # backtest.py와 동일한 청산 로직
-                        if entry_regime == "bullish":
-                            # RSI 기반 조기 청산
-                            if rsi <= BULLISH_EARLY_EXIT_RSI and pnl_pct < 0:
-                                signal = "flat"
-                            # 트레일링 스톱
-                            elif pnl_pct > best_pnl_pct:
-                                best_pnl_pct = pnl_pct
-                            elif pnl_pct >= BULLISH_TRAILING_STOP_ACTIVATION:
-                                trailing_stop_active = True
-                                if trailing_stop_active and best_pnl_pct - pnl_pct >= BULLISH_TRAILING_STOP_PCT:
-                                    signal = "flat"
-                            # 익절/손절
-                            elif pnl_pct >= BULLISH_PROFIT_TARGET:
-                                signal = "flat"
-                            elif pnl_pct <= -BULLISH_STOP_LOSS:
-                                signal = "flat"
-                            else:
-                                stop_loss_price = entry_price * (1 - BULLISH_STOP_LOSS_PRICE / 100 / LEVERAGE)
-                                if price <= stop_loss_price:
-                                    signal = "flat"
-                        elif entry_regime == "sideways":
-                            # 횡보장 롱: 고점 근처 익절, 하단 이탈 손절, 기본 손절 2%
-                            if box_high_entry > 0 and box_low_entry > 0:
-                                box_high_threshold = box_high_entry * (1 - SIDEWAYS_BOX_TOP_MARGIN)
-                                if price >= box_high_threshold:
-                                    signal = "flat"
-                                else:
-                                    box_low_threshold = box_low_entry * (1 - 0.01)
-                                    if price < box_low_threshold:
-                                        signal = "flat"
-                            if signal is None and pnl_pct <= -SIDEWAYS_STOP_LOSS:
-                                signal = "flat"
+                        if pnl_pct > best_pnl_pct:
+                            best_pnl_pct = pnl_pct
+
+                        regime = entry_regime or ""
+                        reason = check_long_exit(
+                            regime=regime, pnl_pct=pnl_pct, rsi=rsi, price=price,
+                            entry_price=entry_price, best_pnl_pct=best_pnl_pct,
+                            box_high=box_high_entry or 0, box_low=box_low_entry or 0,
+                        )
+                        if reason:
+                            signal = "flat"
                     elif signal is None and not (pattern_target > 0 and pattern_stop > 0) and not is_long:  # SHORT
                         if price < lowest_price:
                             lowest_price = price
-                        
-                        # backtest.py와 동일한 청산 로직
-                        if entry_regime == "bearish":
-                            # RSI 기반 조기 청산
-                            if rsi >= BEARISH_EARLY_EXIT_RSI and pnl_pct < 0:
-                                signal = "flat"
-                            # 트레일링 스톱
-                            elif pnl_pct > best_pnl_pct:
-                                best_pnl_pct = pnl_pct
-                            elif pnl_pct >= BEARISH_TRAILING_STOP_ACTIVATION:
-                                trailing_stop_active = True
-                                if trailing_stop_active and best_pnl_pct - pnl_pct >= BEARISH_TRAILING_STOP_PCT:
-                                    signal = "flat"
-                            # 익절/손절
-                            elif pnl_pct >= BEARISH_PROFIT_TARGET:
-                                signal = "flat"
-                            elif pnl_pct <= -BEARISH_STOP_LOSS:
-                                signal = "flat"
-                            else:
-                                stop_loss_price = entry_price * (1 + BEARISH_STOP_LOSS_PRICE / 100 / LEVERAGE)
-                                if price >= stop_loss_price:
-                                    signal = "flat"
-                        elif entry_regime == "sideways":
-                            # 횡보장 숏: 저점 근처 익절, 상단 이탈 손절, 기본 손절 2%
-                            if box_high_entry > 0 and box_low_entry > 0:
-                                box_low_threshold = box_low_entry * (1 + SIDEWAYS_BOX_BOTTOM_MARGIN)
-                                if price <= box_low_threshold:
-                                    signal = "flat"
-                                else:
-                                    box_high_threshold = box_high_entry * (1 + 0.01)
-                                    if price > box_high_threshold:
-                                        signal = "flat"
-                            if signal is None and pnl_pct <= -SIDEWAYS_STOP_LOSS:
-                                signal = "flat"
+                        if pnl_pct > best_pnl_pct:
+                            best_pnl_pct = pnl_pct
+
+                        regime = entry_regime or ""
+                        reason = check_short_exit(
+                            regime=regime, pnl_pct=pnl_pct, rsi=rsi, price=price,
+                            entry_price=entry_price, best_pnl_pct=best_pnl_pct,
+                            box_high=box_high_entry or 0, box_low=box_low_entry or 0,
+                        )
+                        if reason:
+                            signal = "flat"
                 else:
                     # 진입 신호 생성 (backtest.py와 동일)
+                    use_15m = len(price_history_15m) >= REGIME_LOOKBACK_15M
+                    rsi_prev = float(df["rsi"].iloc[-2]) if len(df) >= 2 else None
+                    open_prev = float(df["open"].iloc[-2]) if len(df) >= 2 else None
+                    close_prev = float(df["close"].iloc[-2]) if len(df) >= 2 else None
+                    open_curr = float(latest["open"])
+                    if regime == "neutral" and rsi_15m is not None and macd_line_15m is not None and macd_signal_15m is not None:
+                        rsi_use, macd_ln, macd_sig = rsi_15m, macd_line_15m, macd_signal_15m
+                    else:
+                        rsi_use = rsi
+                        macd_ln = float(latest["macd_line"]) if "macd_line" in latest and pd.notna(latest.get("macd_line")) else None
+                        macd_sig = float(latest["macd_signal"]) if "macd_signal" in latest and pd.notna(latest.get("macd_signal")) else None
                     signal = swing_strategy_signal(
-                        rsi_value=rsi,
+                        rsi_value=rsi_use,
                         price=price,
+                        rsi_prev=rsi_prev,
+                        open_prev=open_prev,
+                        close_prev=close_prev,
+                        open_curr=open_curr,
                         short_ma=short_ma,
                         long_ma=long_ma,
                         has_position=has_position,
                         is_long=is_long,
                         regime=regime,
                         price_history=price_history,
+                        regime_short_ma=short_ma_15m if use_15m else None,
+                        regime_long_ma=long_ma_15m if use_15m else None,
+                        regime_ma_50=None,
+                        regime_ma_100=None,
+                        regime_price_history=price_history_15m if use_15m else None,
+                        macd_line=macd_ln,
+                        macd_signal=macd_sig,
                     )
 
 
@@ -275,12 +217,14 @@ def main() -> None:
                 if daily_start_date != current_date:
                     daily_start_balance = balance
                     daily_start_date = current_date
+                    consecutive_loss_count = 0
 
-                # 일일 손실 한도: 초과 시 진입 불가
+                # 일일 손실 한도 / 연속 손실 한도: 초과 시 진입 불가
                 daily_loss_pct = 0.0
                 if daily_start_balance > 0:
                     daily_loss_pct = (daily_start_balance - balance) / daily_start_balance * 100
                 daily_limit_hit = daily_loss_pct >= DAILY_LOSS_LIMIT_PCT
+                consecutive_limit_hit = consecutive_loss_count >= CONSECUTIVE_LOSS_LIMIT
 
                 if has_position and signal == "flat":
                     # 포지션 종료
@@ -307,10 +251,9 @@ def main() -> None:
                                 order = exchange.create_market_buy_order(
                                     SYMBOL, contracts, {"reduceOnly": True}
                                 )
-                            # 주문 실행 검증
-                            order_status = order.get("status", "") if order else ""
                             side_str = "LONG" if is_long else "SHORT"
-                            log(f"{side_str} 청산 | 진입={entry_price:.2f} 청산={price:.2f}")
+                            regime_kr = REGIME_KR.get(entry_regime, entry_regime)
+                            log(f"{side_str} 청산 | {regime_kr} | 진입={entry_price:.2f} 청산={price:.2f} 수익률={pnl_pct:+.2f}%")
                         except Exception as e:
                             log(f"청산 주문 실패: {e}", "ERROR")
                             continue  # 상태 유지, 다음 루프에서 재시도
@@ -322,13 +265,23 @@ def main() -> None:
                         log(f"청산 후 잔고 조회 실패: {e}", "ERROR")
                         new_balance = balance
                     pnl = new_balance - entry_balance
+                    if pnl < 0:
+                        consecutive_loss_count += 1
+                    else:
+                        consecutive_loss_count = 0
                     log_trade(
                         side="LONG" if is_long else "SHORT",
                         entry_price=entry_price,
                         exit_price=price,
                         pnl=pnl,
                         balance_after=new_balance,
-                        meta={"timeframe": TIMEFRAME, "symbol": SYMBOL, "regime": entry_regime},
+                        meta={
+                            "timeframe": TIMEFRAME,
+                            "symbol": SYMBOL,
+                            "regime": entry_regime,
+                            "pnl_pct": round(pnl_pct, 2),
+                            "consecutive_loss": consecutive_loss_count,
+                        },
                     )
                     has_position = False
                     is_long = False
@@ -338,7 +291,6 @@ def main() -> None:
                     box_low_entry = 0.0
                     highest_price = 0.0
                     lowest_price = float("inf")
-                    partial_profit_taken = False
                     trailing_stop_active = False
                     best_pnl_pct = 0.0
                     pattern_type = ""
@@ -347,8 +299,11 @@ def main() -> None:
                     entry_balance = new_balance
 
                 elif (not has_position) and (signal == "long" or signal == "short"):
-                    if daily_limit_hit:
-                        log(f"[진입생략] 일일손실한도 {daily_loss_pct:.1f}%")
+                    if daily_limit_hit or consecutive_limit_hit:
+                        if daily_limit_hit:
+                            log(f"[진입생략] 일일손실한도 {daily_loss_pct:.1f}% | 잔고={balance:.2f}")
+                        else:
+                            log(f"[진입생략] 연속손실 {consecutive_loss_count}회 당일 중단 | 시그널={signal}")
                     else:
                         # 진입
                         order_usdt = balance * POSITION_SIZE_PERCENT
@@ -369,29 +324,30 @@ def main() -> None:
                                 if signal == "long":
                                     order = exchange.create_market_buy_order(SYMBOL, amount)
                                     pt, ptg, pst = ("", 0.0, 0.0) if not (pattern_info and pattern_info.side == "LONG") else (pattern_info.name, pattern_info.target_price, pattern_info.stop_price)
-                                    log(f"LONG 진입 | 가격={mkt_price:.2f} 잔고={balance:.2f}" + (f" 패턴={pt}" if pt else ""))
+                                    regime_kr = REGIME_KR.get(regime, regime)
+                                    log(f"LONG 진입 | {regime_kr} | 가격={mkt_price:.2f} 잔고={balance:.2f} 투입={order_usdt:.2f} USDT" + (f" 패턴={pt}" if pt else ""))
                                     has_position, is_long = True, True
                                     entry_price, highest_price = mkt_price, mkt_price
                                     pattern_type, pattern_target, pattern_stop = pt, ptg, pst
                                 else:
                                     order = exchange.create_market_sell_order(SYMBOL, amount)
                                     pt, ptg, pst = ("", 0.0, 0.0) if not (pattern_info and pattern_info.side == "SHORT") else (pattern_info.name, pattern_info.target_price, pattern_info.stop_price)
-                                    log(f"SHORT 진입 | 가격={mkt_price:.2f} 잔고={balance:.2f}" + (f" 패턴={pt}" if pt else ""))
+                                    regime_kr = REGIME_KR.get(regime, regime)
+                                    log(f"SHORT 진입 | {regime_kr} | 가격={mkt_price:.2f} 잔고={balance:.2f} 투입={order_usdt:.2f} USDT" + (f" 패턴={pt}" if pt else ""))
                                     has_position, is_long = True, False
                                     entry_price, lowest_price = mkt_price, mkt_price
                                     pattern_type, pattern_target, pattern_stop = pt, ptg, pst
                                 
                                 entry_regime = regime
                                 entry_balance = balance
-                                partial_profit_taken = False
                                 trailing_stop_active = False
                                 best_pnl_pct = 0.0
-                                # 횡보장 진입 시 박스권 저장
+                                # 횡보장 진입 시 박스권 저장 (15분봉 박스권)
                                 box_high_entry = 0.0
                                 box_low_entry = 0.0
-                                if regime == "sideways" and len(price_history) >= SIDEWAYS_BOX_PERIOD:
-                                    box_high_entry = max(price_history[-SIDEWAYS_BOX_PERIOD:])
-                                    box_low_entry = min(price_history[-SIDEWAYS_BOX_PERIOD:])
+                                if regime == "sideways" and use_15m and len(price_history_15m) >= REGIME_LOOKBACK_15M:
+                                    box_high_entry = max(price_history_15m[-REGIME_LOOKBACK_15M:])
+                                    box_low_entry = min(price_history_15m[-REGIME_LOOKBACK_15M:])
                             except Exception as e:
                                 log(f"진입 주문 실패: {e}", "ERROR")
 
@@ -405,7 +361,8 @@ def main() -> None:
                 if has_position:
                     pnl_pct = (price - entry_price) / entry_price * LEVERAGE * 100 if is_long else (entry_price - price) / entry_price * LEVERAGE * 100
                     unrealized = f" 미실현={pnl_pct:+.2f}%"
-                log(f"[5분] {pos_status} | 가격={price:.2f} 잔고={bal:.2f}{unrealized}")
+                regime_str = f" | {REGIME_KR.get(entry_regime, entry_regime)}" if has_position and entry_regime else ""
+                log(f"[5분] {pos_status}{regime_str} | 가격={price:.2f} RSI={rsi:.0f} 잔고={bal:.2f}{unrealized}")
 
                 last_candle_time = latest_time
 

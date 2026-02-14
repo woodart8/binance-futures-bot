@@ -1,17 +1,12 @@
-"""
-매매 기록 로깅 유틸리티.
-
-처음에는 CSV 파일(`trades_log.csv`)에 기록하고,
-나중에 필요하면 DB로 교체할 수 있다.
-"""
+"""매매 기록 CSV 로깅."""
 
 import csv
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-
 LOG_FILE = Path("trades_log.csv")
+HEADERS = ("time_utc", "side", "entry_price", "exit_price", "pnl", "balance_after", "meta")
 
 
 def log_trade(
@@ -22,33 +17,18 @@ def log_trade(
     balance_after: float,
     meta: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """
-    단일 트레이드(진입~청산)를 CSV에 기록한다.
-    """
+    row = [
+        datetime.now(timezone.utc).isoformat(),
+        side,
+        round(entry_price, 6),
+        round(exit_price, 6),
+        round(pnl, 6),
+        round(balance_after, 6),
+        meta or {},
+    ]
     is_new = not LOG_FILE.exists()
-    with LOG_FILE.open("a", newline="", encoding="utf-8") as file:
-        writer = csv.writer(file)
+    with LOG_FILE.open("a", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
         if is_new:
-            writer.writerow(
-                [
-                    "time_utc",
-                    "side",
-                    "entry_price",
-                    "exit_price",
-                    "pnl",
-                    "balance_after",
-                    "meta",
-                ]
-            )
-        writer.writerow(
-            [
-                datetime.now(timezone.utc).isoformat(),
-                side,
-                round(entry_price, 6),
-                round(exit_price, 6),
-                round(pnl, 6),
-                round(balance_after, 6),
-                meta or {},
-            ]
-        )
-
+            w.writerow(HEADERS)
+        w.writerow(row)
