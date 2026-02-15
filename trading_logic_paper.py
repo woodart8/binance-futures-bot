@@ -231,6 +231,22 @@ def open_position(
         log(f"{side} 진입 | {kr} | {reason} | 가격={price:.2f} 잔고={state.balance:.2f} 투입={trade_capital:.2f} | 목표가={target_price:.2f} 손절가={stop_price:.2f}{box_str}")
 
 
+def _update_equity_and_drawdown(state: PaperState, price: float) -> None:
+    if state.has_long_position:
+        unrealized = (price - state.entry_price) / state.entry_price * LEVERAGE * state.balance * RISK_PER_TRADE
+        equity = state.balance + unrealized
+    elif state.has_short_position:
+        unrealized = (state.entry_price - price) / state.entry_price * LEVERAGE * state.balance * RISK_PER_TRADE
+        equity = state.balance + unrealized
+    else:
+        equity = state.balance
+    state.equity = equity
+    if equity > state.peak_equity:
+        state.peak_equity = equity
+    drawdown = (state.peak_equity - equity) / state.peak_equity if state.peak_equity > 0 else 0.0
+    state.max_drawdown = max(state.max_drawdown, drawdown)
+
+
 def _reason_no_exit_strategy(regime: str, is_long: bool, rsi: float, price: float, short_ma: float) -> str:
     return "청산 조건 미충족"
 
@@ -322,9 +338,130 @@ def check_scalp_stop_loss_and_profit(state: PaperState, current_price: float, ca
     return False
 
 
+def try_paper_entry(state: PaperState, df: pd.DataFrame, current_price: float) -> bool:
+    """
+    30초 단위: 현재가 기준으로 진입 조건 만족 시 모의 진입(실제 주문 없음).
+    실거래와 동일 로직, 주문만 시뮬레이션.
+    반환: 진입했으면 True.
+    """
+    if state.has_long_position or state.has_short_position:
+        return False
+
+    latest = df.iloc[-1]
+    rsi = float(latest["rsi"])
+    short_ma = float(latest["ma_short"])
+    long_ma = float(latest["ma_long"])
+    rsi_prev = float(df["rsi"].iloc[-2]) if len(df) >= 2 else None
+    open_prev = float(df["open"].iloc[-2]) if len(df) >= 2 else None
+    close_prev = float(df["close"].iloc[-2]) if len(df) >= 2 else None
+    open_curr = float(latest["open"])
+
+    if len(df) >= REGIME_LOOKBACK_15M * 3:
+        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, _, _, _ = compute_regime_15m(df, current_price)
+    else:
+        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m = "neutral", 0.0, 0.0, 0.0, 0.0, []
+    price_history = df["close"].tail(SIDEWAYS_BOX_PERIOD + 1).tolist() if len(df) >= SIDEWAYS_BOX_PERIOD else None
+    use_15m = len(price_history_15m) >= REGIME_LOOKBACK_15M
+    regime_price_hist = price_history_15m if (use_15m and regime == "sideways") else None
+
+    signal = swing_strategy_signal(
+        rsi_value=rsi,
+        price=current_price,
+        rsi_prev=rsi_prev,
+        open_prev=open_prev,
+        close_prev=close_prev,
+        open_curr=open_curr,
+        short_ma=short_ma,
+        long_ma=long_ma,
+        has_position=False,
+        is_long=False,
+        regime=regime,
+        price_history=price_history,
+        regime_short_ma=short_ma_15m if use_15m else None,
+        regime_long_ma=long_ma_15m if use_15m else None,
+        regime_ma_50=ma_50_15m if use_15m else None,
+        regime_ma_100=ma_100_15m if use_15m else None,
+        regime_price_history=regime_price_hist,
+        macd_line=None,
+        macd_signal=None,
+    )
+    if signal not in ("long", "short"):
+        return False
+
+    ts = latest.get("timestamp")
+    current_date = ts.strftime("%Y-%m-%d") if hasattr(ts, "strftime") else str(ts)[:10]
+    if state.daily_start_date != current_date:
+        state.daily_start_balance = state.balance
+        state.daily_start_date = current_date
+        state.consecutive_loss_count = 0
+    daily_loss_pct = 0.0
+    if state.daily_start_balance > 0:
+        daily_loss_pct = (state.daily_start_balance - state.balance) / state.daily_start_balance * 100
+    if daily_loss_pct >= DAILY_LOSS_LIMIT_PCT or state.consecutive_loss_count >= CONSECUTIVE_LOSS_LIMIT:
+        if daily_loss_pct >= DAILY_LOSS_LIMIT_PCT:
+            _log_daily_limit_once(current_date, daily_loss_pct, REGIME_KR.get(regime, regime))
+        return False
+
+    if state.balance * RISK_PER_TRADE < 5.0:
+        return False
+
+    pattern_info = None
+    if len(df) >= PATTERN_LOOKBACK * 3:
+        df_tmp = df.copy()
+        df_tmp["timestamp"] = pd.to_datetime(df_tmp["timestamp"])
+        df_15m = df_tmp.set_index("timestamp").resample("15min").agg(
+            {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+        ).dropna()
+        if len(df_15m) >= PATTERN_LOOKBACK:
+            highs = df_15m["high"].iloc[-PATTERN_LOOKBACK:].tolist()
+            lows = df_15m["low"].iloc[-PATTERN_LOOKBACK:].tolist()
+            closes = df_15m["close"].iloc[-PATTERN_LOOKBACK:].tolist()
+            pattern_info = detect_chart_pattern(highs, lows, closes, current_price)
+
+    if signal == "long":
+        pt, ptg, pst = "", 0.0, 0.0
+        if pattern_info and pattern_info.side == "LONG":
+            pt, ptg, pst = pattern_info.name, pattern_info.target_price, pattern_info.stop_price
+        reason = get_entry_reason(
+            regime, "LONG", rsi, current_price, short_ma, long_ma,
+            regime_short_ma=short_ma_15m if use_15m else None,
+            regime_long_ma=long_ma_15m if use_15m else None,
+            regime_ma_50=ma_50_15m if use_15m else None,
+            regime_ma_100=ma_100_15m if use_15m else None,
+            regime_price_history=regime_price_hist,
+            price_history=price_history,
+        ) + (f" + 패턴익절/손절 ({pt})" if pt else "")
+        open_position(
+            state, current_price, "LONG", reason.strip(),
+            regime, price_history, price_history_15m=price_history_15m if regime == "sideways" else None,
+            pattern_type=pt, pattern_target=ptg, pattern_stop=pst,
+        )
+        return True
+    else:
+        pt, ptg, pst = "", 0.0, 0.0
+        if pattern_info and pattern_info.side == "SHORT":
+            pt, ptg, pst = pattern_info.name, pattern_info.target_price, pattern_info.stop_price
+        reason = get_entry_reason(
+            regime, "SHORT", rsi, current_price, short_ma, long_ma,
+            regime_short_ma=short_ma_15m if use_15m else None,
+            regime_long_ma=long_ma_15m if use_15m else None,
+            regime_ma_50=ma_50_15m if use_15m else None,
+            regime_ma_100=ma_100_15m if use_15m else None,
+            regime_price_history=regime_price_hist,
+            price_history=price_history,
+        ) + (f" + 패턴익절/손절 ({pt})" if pt else "")
+        open_position(
+            state, current_price, "SHORT", reason.strip(),
+            regime, price_history, price_history_15m=price_history_15m if regime == "sideways" else None,
+            pattern_type=pt, pattern_target=ptg, pattern_stop=pst,
+        )
+        return True
+
+
 def apply_strategy_on_candle(
     state: PaperState, candle: pd.Series, df: Optional[pd.DataFrame] = None, regime: Optional[str] = None
-) -> None:
+) -> bool:
+    """새 5분봉 시 상태/청산만 처리. 진입은 try_paper_entry(30초 단위)에서만. 반환: 이번에 청산했으면 True."""
     price = float(candle["close"])
     rsi = float(candle["rsi"])
     short_ma = float(candle["ma_short"])
@@ -386,79 +523,14 @@ def apply_strategy_on_candle(
     daily_limit_hit = daily_loss_pct >= DAILY_LOSS_LIMIT_PCT
     consecutive_limit_hit = state.consecutive_loss_count >= CONSECUTIVE_LOSS_LIMIT
 
-    pattern_info = None
-    if df is not None and len(df) >= PATTERN_LOOKBACK * 3 and not has_position:
-        df_tmp = df.copy()
-        df_tmp["timestamp"] = pd.to_datetime(df_tmp["timestamp"])
-        df_15m = df_tmp.set_index("timestamp").resample("15min").agg(
-            {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
-        ).dropna()
-        if len(df_15m) >= PATTERN_LOOKBACK:
-            highs = df_15m["high"].iloc[-PATTERN_LOOKBACK:].tolist()
-            lows = df_15m["low"].iloc[-PATTERN_LOOKBACK:].tolist()
-            closes = df_15m["close"].iloc[-PATTERN_LOOKBACK:].tolist()
-            pattern_info = detect_chart_pattern(highs, lows, closes, price)
-
-    if signal == "long" and not has_position:
-        if daily_limit_hit or consecutive_limit_hit:
-            if daily_limit_hit:
-                _log_daily_limit_once(current_date, daily_loss_pct, regime_kr)
-            elif consecutive_limit_hit and _should_log_reason():
-                log(f"[진입안함] {regime_kr} | 연속손실 {state.consecutive_loss_count}회 당일 중단")
-        else:
-            pt, ptg, pst = "", 0.0, 0.0
-            if pattern_info and pattern_info.side == "LONG":
-                pt, ptg, pst = pattern_info.name, pattern_info.target_price, pattern_info.stop_price
-                reason_suffix = f" + 패턴익절/손절 ({pt})"
-            else:
-                reason_suffix = ""
-            entry_reason = get_entry_reason(
-                regime, "LONG", rsi_use, price, short_ma, long_ma,
-                regime_short_ma=short_ma_15m if use_15m else None,
-                regime_long_ma=long_ma_15m if use_15m else None,
-                regime_ma_50=ma_50_15m if use_15m else None,
-                regime_ma_100=ma_100_15m if use_15m else None,
-                regime_price_history=regime_price_hist,
-                price_history=price_history,
-            ) + reason_suffix
-            open_position(
-                state, price, "LONG", entry_reason.strip(),
-                regime, price_history, price_history_15m=price_history_15m if regime == "sideways" else None,
-                pattern_type=pt, pattern_target=ptg, pattern_stop=pst,
-            )
-    elif signal == "short" and not has_position:
-        if daily_limit_hit or consecutive_limit_hit:
-            if daily_limit_hit:
-                _log_daily_limit_once(current_date, daily_loss_pct, regime_kr)
-            elif consecutive_limit_hit and _should_log_reason():
-                log(f"[진입안함] {regime_kr} | 연속손실 {state.consecutive_loss_count}회 당일 중단")
-        else:
-            pt, ptg, pst = "", 0.0, 0.0
-            if pattern_info and pattern_info.side == "SHORT":
-                pt, ptg, pst = pattern_info.name, pattern_info.target_price, pattern_info.stop_price
-                reason_suffix = f" + 패턴익절/손절 ({pt})"
-            else:
-                reason_suffix = ""
-            entry_reason = get_entry_reason(
-                regime, "SHORT", rsi_use, price, short_ma, long_ma,
-                regime_short_ma=short_ma_15m if use_15m else None,
-                regime_long_ma=long_ma_15m if use_15m else None,
-                regime_ma_50=ma_50_15m if use_15m else None,
-                regime_ma_100=ma_100_15m if use_15m else None,
-                regime_price_history=regime_price_hist,
-                price_history=price_history,
-            ) + reason_suffix
-            open_position(
-                state, price, "SHORT", entry_reason.strip(),
-                regime, price_history, price_history_15m=price_history_15m if regime == "sideways" else None,
-                pattern_type=pt, pattern_target=ptg, pattern_stop=pst,
-            )
-    elif signal == "flat" and has_position:
+    if signal == "flat" and has_position:
         if state.pattern_target > 0 and state.pattern_stop > 0:
             pass
         else:
             side = "LONG" if is_long else "SHORT"
             close_position(state, candle, side, f"단타청산({regime_kr})")
+            _update_equity_and_drawdown(state, price)
+            return True
     else:
         if not has_position:
             if daily_limit_hit or consecutive_limit_hit:
@@ -480,29 +552,5 @@ def apply_strategy_on_candle(
         elif has_position and signal == "hold":
             log(f"[청산대기] {regime_kr} | {_reason_no_exit_strategy(regime, is_long, rsi, price, short_ma)}")
 
-    if state.has_long_position:
-        unrealized = (
-            (price - state.entry_price)
-            / state.entry_price
-            * LEVERAGE
-            * state.balance
-            * RISK_PER_TRADE
-        )
-        equity = state.balance + unrealized
-    elif state.has_short_position:
-        unrealized = (
-            (state.entry_price - price)
-            / state.entry_price
-            * LEVERAGE
-            * state.balance
-            * RISK_PER_TRADE
-        )
-        equity = state.balance + unrealized
-    else:
-        equity = state.balance
-
-    state.equity = equity
-    if equity > state.peak_equity:
-        state.peak_equity = equity
-    drawdown = (state.peak_equity - equity) / state.peak_equity if state.peak_equity > 0 else 0.0
-    state.max_drawdown = max(state.max_drawdown, drawdown)
+    _update_equity_and_drawdown(state, price)
+    return False

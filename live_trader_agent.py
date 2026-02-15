@@ -23,6 +23,7 @@ from config import (
     MACD_FAST,
     MACD_SLOW,
     MACD_SIGNAL,
+    LIVE_CHECK_INTERVAL,
 )
 from exchange_client import get_private_exchange
 from data import fetch_ohlcv
@@ -35,6 +36,8 @@ from trading_logic_live import (
     init_live_state,
     process_live_candle,
     log_5m_status,
+    check_tp_sl_and_close,
+    try_live_entry,
 )
 
 OHLCV_CONSECUTIVE_FAILURE_LIMIT = 30
@@ -81,6 +84,26 @@ def main() -> None:
             latest_time = latest["timestamp"]
             price = float(latest["close"])
 
+            try:
+                ticker = exchange.fetch_ticker(SYMBOL)
+                current_price = float(ticker["last"])
+            except Exception as e:
+                log(f"현재가 조회 실패: {e}", "ERROR")
+                current_price = price
+
+            # 30초 단위: 포지션 보유 시 현재가로 익절/손절 체크
+            if state.get("has_position"):
+                state, did_close = check_tp_sl_and_close(exchange, state, current_price, df)
+                if did_close:
+                    time.sleep(LIVE_CHECK_INTERVAL)
+                    continue
+            else:
+                # 30초 단위: 진입 조건 만족 시 현재가로 진입
+                state, did_enter = try_live_entry(exchange, state, df, current_price)
+                if did_enter:
+                    time.sleep(LIVE_CHECK_INTERVAL)
+                    continue
+
             if state["last_candle_time"] is None:
                 state["last_candle_time"] = latest_time
                 try:
@@ -89,13 +112,15 @@ def main() -> None:
                     bal = 0.0
                 log(f"[시작] 가격={price:.2f} 잔고={bal:.2f}")
             elif latest_time > state["last_candle_time"]:
-                state, skip = process_live_candle(exchange, state, df)
+                state, skip, did_close = process_live_candle(exchange, state, df)
                 if skip:
                     time.sleep(60)
                     continue
-                log_5m_status(exchange, state, df)
+                # 진입/청산 시에는 해당 로그만 남기고 5분 로그는 생략
+                if not did_close:
+                    log_5m_status(exchange, state, df)
 
-            time.sleep(300)
+            time.sleep(LIVE_CHECK_INTERVAL)
 
     except KeyboardInterrupt:
         pass

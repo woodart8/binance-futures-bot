@@ -23,6 +23,7 @@ from config import (
     MA_SHORT_PERIOD,
     MA_LONG_PERIOD,
     MA_MID_PERIOD,
+    SYMBOL,
 )
 from exchange_client import get_public_exchange
 from data import fetch_ohlcv
@@ -36,9 +37,10 @@ from trading_logic_paper import (
     init_state,
     check_scalp_stop_loss_and_profit,
     apply_strategy_on_candle,
+    try_paper_entry,
 )
 
-CHECK_INTERVAL = 30
+CHECK_INTERVAL = 10
 
 
 def main() -> None:
@@ -68,10 +70,24 @@ def main() -> None:
 
             latest = df.iloc[-1]
             latest_time = latest["timestamp"]
-            current_price = float(latest["close"])
+            price = float(latest["close"])
 
+            try:
+                ticker = exchange.fetch_ticker(SYMBOL)
+                current_price = float(ticker["last"])
+            except Exception as e:
+                log(f"현재가 조회 실패: {e}", "ERROR")
+                current_price = price
+
+            # 30초 단위: 포지션 보유 시 현재가로 익절/손절 체크 (모의 청산)
             if state.has_long_position or state.has_short_position:
-                if check_scalp_stop_loss_and_profit(state, current_price, latest):
+                candle_for_close = pd.Series({**latest.to_dict(), "close": current_price})
+                if check_scalp_stop_loss_and_profit(state, current_price, candle_for_close):
+                    time.sleep(CHECK_INTERVAL)
+                    continue
+            else:
+                # 30초 단위: 진입 조건 만족 시 현재가로 모의 진입(실제 주문 없음)
+                if try_paper_entry(state, df, current_price):
                     time.sleep(CHECK_INTERVAL)
                     continue
 
@@ -84,13 +100,12 @@ def main() -> None:
                 total_pnl = state.equity - INITIAL_BALANCE
                 log(f"시작 포지션={pos_status} 가격={current_price:.2f} 잔고={state.balance:.2f} PNL={total_pnl:+.2f}")
             elif latest_time > last_candle_time:
-                price = float(latest["close"])
-                rsi = float(latest["rsi"])
-                had_position_before = state.has_long_position or state.has_short_position
-
-                apply_strategy_on_candle(state, latest, df)
+                did_close = apply_strategy_on_candle(state, latest, df)
                 last_candle_time = latest_time
-                just_entered = not had_position_before and (state.has_long_position or state.has_short_position)
+                # 진입/청산 시에는 해당 로그만 남기고 5분 로그는 생략
+                if did_close:
+                    time.sleep(CHECK_INTERVAL)
+                    continue
 
                 pos_status = (
                     "LONG" if state.has_long_position
@@ -107,8 +122,8 @@ def main() -> None:
                 box_str = ""
                 if state.entry_regime == "sideways" and state.box_high > 0 and state.box_low > 0:
                     box_str = f" | 박스 하단={state.box_low:.2f} 상단={state.box_high:.2f}"
-                if not just_entered:
-                    log(f"[5m] {pos_status}{regime_str}{box_str} 가격={price:.2f} RSI={rsi:.0f} 잔고={state.balance:.2f} PNL={total_pnl:+.2f}{extra}")
+                rsi = float(latest["rsi"])
+                log(f"[5m] {pos_status}{regime_str}{box_str} 가격={price:.2f} RSI={rsi:.0f} 잔고={state.balance:.2f} PNL={total_pnl:+.2f}{extra}")
 
             time.sleep(CHECK_INTERVAL)
 
