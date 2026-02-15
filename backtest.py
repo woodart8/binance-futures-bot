@@ -422,7 +422,7 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
         # 전략 신호 생성 (regime은 5분봉 기반)
         regime = current_regime
         
-        # 박스권 판단: 횡보 시 15분봉, 그 외 5분봉 (swing_strategy_signal용)
+        # 박스권 판단: 횡보 시 15분봉, 그 외 5분봉 (단타 시그널용)
         if i >= SIDEWAYS_BOX_PERIOD:
             price_history = close_prices[i - SIDEWAYS_BOX_PERIOD:i + 1].tolist()
         else:
@@ -443,21 +443,18 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
         daily_limit_hit = daily_loss_pct >= DAILY_LOSS_LIMIT_PCT
         consecutive_limit_hit = consecutive_loss_count >= CONSECUTIVE_LOSS_LIMIT
         
-        # 전략 시그널 생성 (횡보: 5분봉 / 중립: 15분봉 RSI·MACD)
+        # 전략 시그널 생성 (횡보: 15분봉 박스 / 추세: 15분봉 MA 추세추종)
         use_15m_sideways = n_15m >= REGIME_LOOKBACK_15M and len(price_history_15m) >= REGIME_LOOKBACK_15M
+        use_15m_trend = regime == "neutral" and n_15m >= REGIME_LOOKBACK_15M
         rsi_prev = float(df.iloc[i - 1]["rsi"]) if i > 0 else None
         open_prev = float(df.iloc[i - 1]["open"]) if i > 0 else None
         close_prev = float(df.iloc[i - 1]["close"]) if i > 0 else None
         open_curr = float(row["open"])
-        if regime == "neutral" and n_15m > 0:
-            idx_15m_sig = min(i // 3, n_15m - 1)
-            rsi_use = float(df_15m.iloc[idx_15m_sig]["rsi"])
-            macd_ln = float(df_15m.iloc[idx_15m_sig]["macd_line"])
-            macd_sig = float(df_15m.iloc[idx_15m_sig]["macd_signal"])
-        else:
-            rsi_use = rsi
-            macd_ln = float(row["macd_line"]) if "macd_line" in row and pd.notna(row.get("macd_line")) else None
-            macd_sig = float(row["macd_signal"]) if "macd_signal" in row and pd.notna(row.get("macd_signal")) else None
+        rsi_use = rsi
+        regime_short = short_ma_15m if (use_15m_sideways or use_15m_trend) else None
+        regime_long = long_ma_15m if (use_15m_sideways or use_15m_trend) else None
+        regime_ma50 = ma_50_15m if (use_15m_sideways or use_15m_trend) else None
+        regime_ma100 = ma_100_15m if (use_15m_sideways or use_15m_trend) else None
         signal = swing_strategy_signal(
             rsi_value=rsi_use,
             price=price,
@@ -471,13 +468,13 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
             is_long=is_long,
             regime=regime,
             price_history=price_history,
-            regime_short_ma=short_ma_15m if use_15m_sideways else None,
-            regime_long_ma=long_ma_15m if use_15m_sideways else None,
-            regime_ma_50=None,
-            regime_ma_100=None,
+            regime_short_ma=regime_short,
+            regime_long_ma=regime_long,
+            regime_ma_50=regime_ma50,
+            regime_ma_100=regime_ma100,
             regime_price_history=price_history_15m if use_15m_sideways else None,
-            macd_line=macd_ln,
-            macd_signal=macd_sig,
+            macd_line=None,
+            macd_signal=None,
         )
         
         # 차트 패턴 감지: 패턴+전략 방향 일치 시 패턴 TP/SL 적용

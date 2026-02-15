@@ -1,4 +1,4 @@
-"""횡보/중립장 TP/SL 청산."""
+"""횡보/추세장 TP/SL 청산."""
 
 from typing import Optional
 
@@ -7,21 +7,21 @@ from config import (
     SIDEWAYS_PROFIT_TARGET,
     SIDEWAYS_STOP_LOSS_PRICE,
     SIDEWAYS_BOX_EXIT_MARGIN_PCT,
-    NEUTRAL_STOP_LOSS,
-    NEUTRAL_PROFIT_TARGET,
-    NEUTRAL_STOP_LOSS_PRICE,
+    TREND_STOP_LOSS,
+    TREND_PROFIT_TARGET,
+    TREND_STOP_LOSS_PRICE,
     LEVERAGE,
 )
 
 EXIT_REASON_DISPLAY = {
     "횡보_익절": "횡보 익절",
-    "중립_익절": "중립 익절",
+    "추세_익절": "추세 익절",
     "박스권_하단이탈": "박스권 하단 이탈",
     "박스권_상단이탈": "박스권 상단 이탈",
     "손절_횡보": "손절",
-    "손절_중립": "손절",
+    "손절_추세": "손절",
     "스탑로스_횡보": "스탑로스",
-    "스탑로스_중립": "스탑로스",
+    "스탑로스_추세": "스탑로스",
 }
 
 
@@ -34,11 +34,11 @@ def _check_exit(
     box_low: float,
     regime: str,
 ) -> Optional[str]:
-    is_neutral = regime == "neutral"
-    sl = NEUTRAL_STOP_LOSS if is_neutral else SIDEWAYS_STOP_LOSS
-    tp = NEUTRAL_PROFIT_TARGET if is_neutral else SIDEWAYS_PROFIT_TARGET
-    sl_price = NEUTRAL_STOP_LOSS_PRICE if is_neutral else SIDEWAYS_STOP_LOSS_PRICE
-    reason_suffix = "_중립" if is_neutral else "_횡보"
+    is_trend = regime == "neutral"
+    sl = TREND_STOP_LOSS if is_trend else SIDEWAYS_STOP_LOSS
+    tp = TREND_PROFIT_TARGET if is_trend else SIDEWAYS_PROFIT_TARGET
+    sl_price = TREND_STOP_LOSS_PRICE if is_trend else SIDEWAYS_STOP_LOSS_PRICE
+    reason_suffix = "_추세" if is_trend else "_횡보"
 
     if pnl_pct <= -sl:
         return f"손절{reason_suffix}"
@@ -47,7 +47,7 @@ def _check_exit(
         stop = entry_price * (1 - stop_pct)
         if price <= stop:
             return f"스탑로스{reason_suffix}"
-        if not is_neutral and box_high > box_low:
+        if not is_trend and box_high > box_low:
             m = SIDEWAYS_BOX_EXIT_MARGIN_PCT / 100
             if price < box_low * (1 - m):
                 return "박스권_하단이탈"
@@ -55,12 +55,12 @@ def _check_exit(
         stop = entry_price * (1 + stop_pct)
         if price >= stop:
             return f"스탑로스{reason_suffix}"
-        if not is_neutral and box_high > box_low:
+        if not is_trend and box_high > box_low:
             m = SIDEWAYS_BOX_EXIT_MARGIN_PCT / 100
             if price > box_high * (1 + m):
                 return "박스권_상단이탈"
     if pnl_pct >= tp:
-        return "중립_익절" if is_neutral else "횡보_익절"
+        return "추세_익절" if is_trend else "횡보_익절"
     return None
 
 

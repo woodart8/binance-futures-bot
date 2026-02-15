@@ -6,20 +6,22 @@ from config import (
     MA_SHORT_PERIOD,
     MA_LONG_PERIOD,
     REGIME_LOOKBACK_15M,
-    NEUTRAL_RSI_LONG_MAX,
-    NEUTRAL_RSI_SHORT_MIN,
     SIDEWAYS_BOX_PERIOD,
     SIDEWAYS_BOX_TOP_MARGIN,
     SIDEWAYS_BOX_BOTTOM_MARGIN,
     SIDEWAYS_ENABLED,
     SIDEWAYS_MIN_TOUCHES,
     SIDEWAYS_BOX_RANGE_PCT_MIN,
+    TREND_PULLBACK_MA_PCT,
+    TREND_RSI_LONG_MAX,
+    TREND_RSI_SHORT_MIN,
+    TREND_MA50_MA100_FILTER,
 )
 
 Signal = Literal["long", "short", "flat", "hold"]
 MarketRegime = Literal["sideways", "neutral"]
 
-REGIME_KR = {"sideways": "횡보장", "neutral": "중립"}
+REGIME_KR = {"sideways": "횡보장", "neutral": "추세장"}
 BOX_TOUCH_THRESHOLD = 0.012  # 1.2% 이내 = 터치
 
 
@@ -111,15 +113,33 @@ def swing_strategy_signal(
     macd_line: Optional[float] = None,
     macd_signal: Optional[float] = None,
 ) -> Signal:
-    """neutral=15분봉 MACD+RSI 진입(RSI≤30 & MACD>시그널 롱, RSI≥70 & MACD<시그널 숏). sideways=박스 하단 롱 / 상단 숏."""
+    """neutral=추세 추종 단타(상승추세 롱 풀백, 하락추세 숏 풀백). sideways=박스 하단 롱 / 상단 숏."""
     if regime == "neutral":
+        ma_short = regime_short_ma if regime_short_ma is not None else short_ma
+        ma_long = regime_long_ma if regime_long_ma is not None else long_ma
+        ma_50 = regime_ma_50 if regime_ma_50 is not None else None
+        ma_100 = regime_ma_100 if regime_ma_100 is not None else None
+        if ma_short is None or ma_long is None or ma_long <= 0:
+            return "hold"
+        uptrend = ma_short > ma_long
+        if TREND_MA50_MA100_FILTER and ma_50 is not None and ma_100 is not None:
+            uptrend = uptrend and ma_50 > ma_100
+            downtrend = ma_short < ma_long and ma_50 < ma_100
+        else:
+            downtrend = ma_short < ma_long
+        pullback_pct = TREND_PULLBACK_MA_PCT / 100
         if not has_position:
-            macd_bull = macd_line is not None and macd_signal is not None and macd_line > macd_signal
-            macd_bear = macd_line is not None and macd_signal is not None and macd_line < macd_signal
-            if rsi_value <= NEUTRAL_RSI_LONG_MAX and (macd_bull if macd_line is not None else True):
-                return "long"
-            if rsi_value >= NEUTRAL_RSI_SHORT_MIN and (macd_bear if macd_line is not None else True):
-                return "short"
+            if uptrend:
+                if price <= ma_short * (1 + pullback_pct) and rsi_value <= TREND_RSI_LONG_MAX:
+                    return "long"
+            if downtrend:
+                if price >= ma_short * (1 - pullback_pct) and rsi_value >= TREND_RSI_SHORT_MIN:
+                    return "short"
+        else:
+            if is_long and downtrend:
+                return "flat"
+            if not is_long and uptrend:
+                return "flat"
         return "hold"
 
     ma_short = regime_short_ma if regime_short_ma is not None else short_ma

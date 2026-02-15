@@ -1,4 +1,4 @@
-"""5분봉 횡보장 박스 / 중립장 MACD+RSI 스캘핑 설정."""
+"""5분봉 횡보장 박스 / 추세장 추세추종 단타 설정."""
 
 # 거래
 SYMBOL = "BTC/USDT"
@@ -23,12 +23,14 @@ MA_LONGEST_PERIOD = 100
 # 장세 (15분봉 24h)
 REGIME_LOOKBACK_15M = 96
 
-# 중립장 (횡보 아님) - MACD+RSI 진입
-NEUTRAL_RSI_LONG_MAX = 30   # RSI ≤ 30 → 롱
-NEUTRAL_RSI_SHORT_MIN = 70  # RSI ≥ 70 → 숏
-NEUTRAL_PROFIT_TARGET = 4.0
-NEUTRAL_STOP_LOSS = 3.0
-NEUTRAL_STOP_LOSS_PRICE = 3.0
+# 추세장 (횡보 아님) - 추세 추종 단타
+TREND_PROFIT_TARGET = 5.0       # 목표 익절 (%)
+TREND_STOP_LOSS = 2.5          # 손절 (%)
+TREND_STOP_LOSS_PRICE = 2.5    # 가격 기준 손절 (%)
+TREND_PULLBACK_MA_PCT = 1.0    # 단기이평 대비 가격 허용 범위 (%)
+TREND_RSI_LONG_MAX = 58        # 롱 진입 시 RSI 상한 (과매수 방지)
+TREND_RSI_SHORT_MIN = 42       # 숏 진입 시 RSI 하한 (과매도 방지)
+TREND_MA50_MA100_FILTER = True # 상승추세 시 ma_50 > ma_100, 하락추세 시 ma_50 < ma_100 요구
 
 # 횡보장 박스
 SIDEWAYS_ENABLED = True

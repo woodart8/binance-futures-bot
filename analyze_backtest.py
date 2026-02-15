@@ -9,7 +9,7 @@ from strategy_core import REGIME_KR
 
 REGIME_STRATEGY = {
     "sideways": "박스 하단 롱 / 상단 숏 (MA7>MA20 하단, MA7<MA20 상단)",
-    "neutral": "15분봉 MACD+RSI (RSI≤30 & MACD>시그널 롱 / RSI≥70 & MACD<시그널 숏)",
+    "neutral": "추세 추종 단타 (상승추세 MA 풀백 롱 / 하락추세 MA 풀백 숏, 15분봉 MA·RSI)",
 }
 
 
@@ -122,7 +122,7 @@ def run_and_analyze(days: int = 600) -> None:
     if abs(sum_regime_pnl - result.total_pnl) > 0.01:
         print(f"[검증] 장별 손익 합계 불일치: {sum_regime_pnl:.2f} vs {result.total_pnl:.2f}")
 
-    # 장별(전략별) 분석: 횡보장 + 중립장
+    # 장별(전략별) 분석: 횡보장 + 추세장
     print("\n" + "=" * 60)
     print("[전략별 분석]")
     print("=" * 60)

@@ -119,6 +119,9 @@ def fetch_ohlcv_history(exchange, days: int = 365, batch_size: int = 1500) -> pd
 
     if not all_ohlcv:
         return pd.DataFrame()
+    # 요청한 일수만큼만 사용 (최근 N일)
+    if len(all_ohlcv) > target_candles:
+        all_ohlcv = all_ohlcv[-target_candles:]
     df = pd.DataFrame(all_ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
     return df.sort_values("timestamp").drop_duplicates(subset=["timestamp"]).reset_index(drop=True)

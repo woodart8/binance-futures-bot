@@ -230,7 +230,7 @@ def open_position(
 
 
 def _reason_no_entry(regime: str, signal: str, rsi: float, price: float, short_ma: float, long_ma: float) -> str:
-    return f"시그널={signal} (횡보: 박스 4% / 중립: 15분봉 MACD+RSI) 진입 조건 미충족"
+    return f"시그널={signal} (횡보: 박스 4% / 추세: 15분봉 MA 추세추종) 진입 조건 미충족"
 
 
 def _reason_no_exit_strategy(regime: str, is_long: bool, rsi: float, price: float, short_ma: float) -> str:
@@ -349,12 +349,8 @@ def apply_strategy_on_candle(
     open_prev = float(df["open"].iloc[-2]) if df is not None and len(df) >= 2 else None
     close_prev = float(df["close"].iloc[-2]) if df is not None and len(df) >= 2 else None
     open_curr = float(candle["open"])
-    if regime == "neutral" and rsi_15m is not None and macd_line_15m is not None and macd_signal_15m is not None:
-        rsi_use, macd_ln, macd_sig = rsi_15m, macd_line_15m, macd_signal_15m
-    else:
-        rsi_use = rsi
-        macd_ln = float(candle["macd_line"]) if "macd_line" in candle and pd.notna(candle.get("macd_line")) else None
-        macd_sig = float(candle["macd_signal"]) if "macd_signal" in candle and pd.notna(candle.get("macd_signal")) else None
+    rsi_use = rsi
+    regime_price_hist = price_history_15m if (use_15m and regime == "sideways") else None
     signal = swing_strategy_signal(
         rsi_value=rsi_use,
         price=price,
@@ -370,11 +366,11 @@ def apply_strategy_on_candle(
         price_history=price_history,
         regime_short_ma=short_ma_15m if use_15m else None,
         regime_long_ma=long_ma_15m if use_15m else None,
-        regime_ma_50=None,
-        regime_ma_100=None,
-        regime_price_history=price_history_15m if use_15m else None,
-        macd_line=macd_ln,
-        macd_signal=macd_sig,
+        regime_ma_50=ma_50_15m if use_15m else None,
+        regime_ma_100=ma_100_15m if use_15m else None,
+        regime_price_history=regime_price_hist,
+        macd_line=None,
+        macd_signal=None,
     )
     
     regime_kr = REGIME_KR.get(regime, regime)
@@ -413,7 +409,7 @@ def apply_strategy_on_candle(
             else:
                 reason_suffix = ""
             open_position(
-                state, price, "LONG", f"스윙 전략 ({regime_kr}){reason_suffix}".strip(),
+                state, price, "LONG", f"단타 전략 ({regime_kr}){reason_suffix}".strip(),
                 regime, price_history, price_history_15m=price_history_15m if regime == "sideways" else None,
                 pattern_type=pt, pattern_target=ptg, pattern_stop=pst,
             )
@@ -431,13 +427,13 @@ def apply_strategy_on_candle(
             else:
                 reason_suffix = ""
             open_position(
-                state, price, "SHORT", f"스윙 전략 ({regime_kr}){reason_suffix}".strip(),
+                state, price, "SHORT", f"단타 전략 ({regime_kr}){reason_suffix}".strip(),
                 regime, price_history, price_history_15m=price_history_15m if regime == "sideways" else None,
                 pattern_type=pt, pattern_target=ptg, pattern_stop=pst,
             )
     elif signal == "flat" and has_position:
         side = "LONG" if is_long else "SHORT"
-        close_position(state, candle, side, f"스윙청산({regime_kr})")
+        close_position(state, candle, side, f"단타청산({regime_kr})")
     else:
         if _should_log_reason():
             if not has_position:

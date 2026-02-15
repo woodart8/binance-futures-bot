@@ -117,7 +117,7 @@ def main() -> None:
                 if len(df) >= REGIME_LOOKBACK_15M * 3:
                     regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, macd_line_15m, macd_signal_15m = compute_regime_15m(df, price)
                 else:
-                    regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m = "neutral", 0.0, 0.0, 0.0, 0.0, []
+                    regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, macd_line_15m, macd_signal_15m = "neutral", 0.0, 0.0, 0.0, 0.0, [], None, None, None
                 # 진입/청산용 price_history: 5분봉 (횡보 시 regime_*로 15분봉 전달)
                 price_history = df["close"].tail(SIDEWAYS_BOX_PERIOD + 1).tolist() if len(df) >= SIDEWAYS_BOX_PERIOD else df["close"].tolist()
 
@@ -169,18 +169,14 @@ def main() -> None:
                         if reason:
                             signal = "flat"
                 else:
-                    # 진입 신호 생성 (backtest.py와 동일)
+                    # 진입 신호 생성 (backtest.py와 동일, 추세추종 단타)
                     use_15m = len(price_history_15m) >= REGIME_LOOKBACK_15M
                     rsi_prev = float(df["rsi"].iloc[-2]) if len(df) >= 2 else None
                     open_prev = float(df["open"].iloc[-2]) if len(df) >= 2 else None
                     close_prev = float(df["close"].iloc[-2]) if len(df) >= 2 else None
                     open_curr = float(latest["open"])
-                    if regime == "neutral" and rsi_15m is not None and macd_line_15m is not None and macd_signal_15m is not None:
-                        rsi_use, macd_ln, macd_sig = rsi_15m, macd_line_15m, macd_signal_15m
-                    else:
-                        rsi_use = rsi
-                        macd_ln = float(latest["macd_line"]) if "macd_line" in latest and pd.notna(latest.get("macd_line")) else None
-                        macd_sig = float(latest["macd_signal"]) if "macd_signal" in latest and pd.notna(latest.get("macd_signal")) else None
+                    rsi_use = rsi
+                    regime_price_hist = price_history_15m if (use_15m and regime == "sideways") else None
                     signal = swing_strategy_signal(
                         rsi_value=rsi_use,
                         price=price,
@@ -196,11 +192,11 @@ def main() -> None:
                         price_history=price_history,
                         regime_short_ma=short_ma_15m if use_15m else None,
                         regime_long_ma=long_ma_15m if use_15m else None,
-                        regime_ma_50=None,
-                        regime_ma_100=None,
-                        regime_price_history=price_history_15m if use_15m else None,
-                        macd_line=macd_ln,
-                        macd_signal=macd_sig,
+                        regime_ma_50=ma_50_15m if use_15m else None,
+                        regime_ma_100=ma_100_15m if use_15m else None,
+                        regime_price_history=regime_price_hist,
+                        macd_line=None,
+                        macd_signal=None,
                     )
 
 

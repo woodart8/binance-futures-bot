@@ -133,7 +133,7 @@ def send_email(subject: str, html_body: str) -> bool:
     """이메일 발송"""
     import os
 
-    to_addr = os.getenv("EMAIL_TO", "kibeom1145@gmail.com")
+    to_addr = os.getenv("EMAIL_TO", "")
     smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
     smtp_port = int(os.getenv("SMTP_PORT", "587"))
     smtp_user = os.getenv("SMTP_USER")
