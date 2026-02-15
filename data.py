@@ -27,7 +27,8 @@ FETCH_RETRY_DELAY = 2
 
 
 def _fetch_ohlcv_with_retry(exchange, symbol: str, timeframe: str, limit: int, since: int = None):
-    """fetch_ohlcv 호출을 타임아웃 시 재시도와 함께 수행."""
+    """fetch_ohlcv 호출을 타임아웃/네트워크 오류 시 최대 FETCH_RETRIES회 재시도.
+    재시도가 모두 실패하면 예외를 그대로 raise (호출자가 처리)."""
     last_error = None
     kwargs = {"limit": limit}
     if since is not None:

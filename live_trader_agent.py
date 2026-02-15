@@ -1,7 +1,11 @@
 """실거래 에이전트. .env에 API_KEY, SECRET_KEY 필요."""
 
+import sys
 import time
 from typing import Optional
+
+# OHLCV 조회 재시도(3회)까지 모두 실패가 이 횟수만큼 연속되면 프로세스 종료 (무한 루프 방지)
+OHLCV_CONSECUTIVE_FAILURE_LIMIT = 30
 
 import pandas as pd
 
@@ -74,6 +78,7 @@ def main() -> None:
     consecutive_loss_count = 0
 
     last_candle_time = None
+    ohlcv_failure_count = 0
 
     try:
         while True:
@@ -81,8 +86,13 @@ def main() -> None:
                 # 충분한 데이터 확보 (15분봉 24시간 = 96*3 = 288개 5분봉 필요)
                 limit = max(RSI_PERIOD, MA_LONGEST_PERIOD, REGIME_LOOKBACK_15M * 3, PATTERN_LOOKBACK * 3) + 100
                 df = fetch_ohlcv(exchange, limit=limit)
+                ohlcv_failure_count = 0
             except Exception as e:
-                log(f"OHLCV 조회 실패: {e}", "ERROR")
+                ohlcv_failure_count += 1
+                log(f"OHLCV 조회 실패 ({ohlcv_failure_count}/{OHLCV_CONSECUTIVE_FAILURE_LIMIT}): {e}", "ERROR")
+                if ohlcv_failure_count >= OHLCV_CONSECUTIVE_FAILURE_LIMIT:
+                    log(f"OHLCV 조회가 {OHLCV_CONSECUTIVE_FAILURE_LIMIT}회 연속 실패하여 프로세스를 종료합니다. 네트워크/API를 확인 후 재실행하세요.", "ERROR")
+                    sys.exit(1)
                 time.sleep(60)
                 continue
             
