@@ -295,6 +295,7 @@ def main() -> None:
                                 "regime": entry_regime,
                                 "pnl_pct": round(pnl_pct, 2),
                                 "consecutive_loss": consecutive_loss_count,
+                                "reason": "전략청산",
                             },
                         )
                         has_position = False

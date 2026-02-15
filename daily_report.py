@@ -26,6 +26,7 @@ load_dotenv()
 
 LOG_FILE = Path("trades_log.csv")
 KST = timezone(timedelta(hours=9))
+REGIME_KR = {"sideways": "횡보장", "neutral": "추세장"}
 
 
 def _parse_meta(meta_str: str) -> dict:
@@ -89,26 +90,40 @@ def summarize_trades(trades: list[dict]) -> dict:
 
 
 def build_report_html(trades: list[dict], summary: dict) -> str:
-    """이메일 본문 HTML 생성"""
+    """이메일 본문 HTML 생성 (거래별 상세: 수익률, 잔고, 장세, 청산사유 포함)"""
     yesterday = (datetime.now(KST).date() - timedelta(days=1)).strftime("%Y-%m-%d")
 
     if summary["total_trades"] == 0:
         return f"""
         <h2>매매 결과 요약 ({yesterday})</h2>
         <p>전날 거래 내역이 없습니다.</p>
+        <p style="color:#666;font-size:12px">Binance Futures Bot - 일일 리포트</p>
         """
 
     rows_html = ""
     for t in trades:
         pnl = float(t.get("pnl", 0) or 0)
         pnl_class = "green" if pnl > 0 else "red"
+        meta = t.get("meta_dict") or {}
+        pnl_pct = meta.get("pnl_pct")
+        pnl_pct_str = f"{pnl_pct:+.2f}%" if pnl_pct is not None else "-"
+        regime = meta.get("regime", "")
+        regime_kr = REGIME_KR.get(regime, regime or "-")
+        reason = meta.get("reason", "")
+        balance_after = float(t.get("balance_after", 0) or 0)
+        entry_p = float(t.get("entry_price", 0) or 0)
+        exit_p = float(t.get("exit_price", 0) or 0)
         rows_html += f"""
         <tr>
             <td>{t['time_kst'].strftime('%H:%M')}</td>
             <td>{t.get('side', '-')}</td>
-            <td>{float(t.get('entry_price', 0) or 0):,.2f}</td>
-            <td>{float(t.get('exit_price', 0) or 0):,.2f}</td>
+            <td>{entry_p:,.2f}</td>
+            <td>{exit_p:,.2f}</td>
+            <td style="color:{pnl_class}">{pnl_pct_str}</td>
             <td style="color:{pnl_class}">{pnl:+.2f}</td>
+            <td>{balance_after:,.2f}</td>
+            <td>{regime_kr}</td>
+            <td style="font-size:11px">{reason[:40] + '…' if reason and len(reason) > 40 else (reason or '-')}</td>
         </tr>
         """
 
@@ -119,9 +134,11 @@ def build_report_html(trades: list[dict], summary: dict) -> str:
        <strong>승률:</strong> {summary['win_rate']:.1f}%</p>
     <p><strong>총 손익:</strong> {summary['total_pnl']:+.2f} USDT | 
        <strong>최종 잔고:</strong> {summary['last_balance']:,.2f} USDT</p>
-    <table border="1" cellpadding="6" cellspacing="0">
+    <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-size:13px">
         <thead>
-            <tr><th>시간</th><th>방향</th><th>진입가</th><th>청산가</th><th>손익</th></tr>
+            <tr style="background:#eee">
+                <th>시간</th><th>방향</th><th>진입가</th><th>청산가</th><th>수익률</th><th>손익</th><th>잔고(청산후)</th><th>장세</th><th>청산사유</th>
+            </tr>
         </thead>
         <tbody>{rows_html}</tbody>
     </table>

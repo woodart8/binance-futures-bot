@@ -1,4 +1,6 @@
 .env
+trades_log.csv
+paper_trade.log
 __pycache__/
 *.pyc
 .venv/
