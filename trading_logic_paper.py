@@ -251,10 +251,6 @@ def _reason_no_exit_strategy(regime: str, is_long: bool, rsi: float, price: floa
     return "청산 조건 미충족"
 
 
-def _reason_no_exit_scalp(state: PaperState, pnl_pct: float, side: str, current_price: float) -> str:
-    return "손절/익절 조건 미도달"
-
-
 def check_scalp_stop_loss_and_profit(state: PaperState, current_price: float, candle: pd.Series) -> bool:
     if state.has_long_position:
         if state.pattern_target > 0 and state.pattern_stop > 0:
@@ -301,7 +297,7 @@ def check_scalp_stop_loss_and_profit(state: PaperState, current_price: float, ca
                 close_position(state, candle, "SHORT", f"패턴손절({state.pattern_type})")
                 return True
             if _should_log_reason():
-                log(f"[청산대기] 패턴 익절/손절 대기 ({state.pattern_type})")
+                log(f"[손절/익절청산안함] 패턴 익절/손절 대기 ({state.pattern_type})")
             return False
 
         if current_price < state.lowest_price:
@@ -327,14 +323,7 @@ def check_scalp_stop_loss_and_profit(state: PaperState, current_price: float, ca
             close_position(state, candle, "SHORT", f"{msg} ({pnl_pct:.2f}%)")
             return True
 
-    if state.has_long_position or state.has_short_position:
-        side = "LONG" if state.has_long_position else "SHORT"
-        if side == "LONG":
-            pnl_pct = (current_price - state.entry_price) / state.entry_price * LEVERAGE * 100
-        else:
-            pnl_pct = (state.entry_price - current_price) / state.entry_price * LEVERAGE * 100
-        if _should_log_reason():
-            log(f"[청산대기] {_reason_no_exit_scalp(state, pnl_pct, side, current_price)}")
+    # 청산대기 로그는 5m 봉 단위 apply_strategy_on_candle에서만 출력 (중복 방지)
     return False
 
 
