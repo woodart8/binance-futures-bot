@@ -33,7 +33,7 @@ def get_private_exchange() -> ccxt.binanceusdm:
             "apiKey": api_key,
             "secret": secret_key,
             "enableRateLimit": True,
-            "timeout": 30000,  # 30초 타임아웃
+            "timeout": 60000,  # 60초 타임아웃 (네트워크 지연 대비)
             "options": {"defaultType": "future"},
         }
     )
@@ -49,7 +49,7 @@ def get_public_exchange() -> ccxt.binanceusdm:
     return ccxt.binanceusdm(
         {
             "enableRateLimit": True,
-            "timeout": 30000,  # 30초 타임아웃
+            "timeout": 60000,  # 60초 타임아웃 (네트워크 지연 대비)
             "options": {"defaultType": "future"},
         }
     )

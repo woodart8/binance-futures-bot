@@ -2,6 +2,8 @@
 
 import time
 import pandas as pd
+import requests
+import ccxt.base.errors
 
 from config import (
     SYMBOL,
@@ -19,9 +21,36 @@ from config import (
 from indicators import calculate_ma, calculate_rsi, calculate_macd
 from strategy_core import detect_market_regime
 
+# 타임아웃/일시 오류 시 재시도 횟수 및 대기(초)
+FETCH_RETRIES = 3
+FETCH_RETRY_DELAY = 2
+
+
+def _fetch_ohlcv_with_retry(exchange, symbol: str, timeframe: str, limit: int, since: int = None):
+    """fetch_ohlcv 호출을 타임아웃 시 재시도와 함께 수행."""
+    last_error = None
+    kwargs = {"limit": limit}
+    if since is not None:
+        kwargs["since"] = since
+    for attempt in range(FETCH_RETRIES):
+        try:
+            return exchange.fetch_ohlcv(symbol, timeframe, **kwargs)
+        except (
+            requests.exceptions.ReadTimeout,
+            requests.exceptions.ConnectTimeout,
+            ccxt.base.errors.RequestTimeout,
+            ccxt.base.errors.NetworkError,
+        ) as e:
+            last_error = e
+            if attempt < FETCH_RETRIES - 1:
+                time.sleep(FETCH_RETRY_DELAY)
+            else:
+                raise last_error
+    raise last_error
+
 
 def fetch_ohlcv(exchange, limit: int = 400, symbol: str = SYMBOL, timeframe: str = TIMEFRAME) -> pd.DataFrame:
-    ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+    ohlcv = _fetch_ohlcv_with_retry(exchange, symbol, timeframe, limit)
     df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
     return df
@@ -72,7 +101,7 @@ def fetch_ohlcv_history(exchange, days: int = 365, batch_size: int = 1500) -> pd
     for _ in range(num_batches):
         try:
             batch_start = current_end - (batch_size * 5 * 60 * 1000)
-            ohlcv = exchange.fetch_ohlcv(SYMBOL, TIMEFRAME, limit=batch_size, since=batch_start)
+            ohlcv = _fetch_ohlcv_with_retry(exchange, SYMBOL, TIMEFRAME, batch_size, since=batch_start)
             if not ohlcv:
                 break
             if all_ohlcv:

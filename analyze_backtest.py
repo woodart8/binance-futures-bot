@@ -86,7 +86,7 @@ def analyze_by_reason(trade_details: list) -> dict:
     return by_reason
 
 
-def run_and_analyze(days: int = 90) -> None:
+def run_and_analyze(days: int = 600) -> None:
     print(f"5분봉 {days}일치 데이터 수집 중...")
     exchange = get_public_exchange()
     df = fetch_ohlcv_history(exchange, days=days)
@@ -157,4 +157,4 @@ def run_and_analyze(days: int = 90) -> None:
 
 
 if __name__ == "__main__":
-    run_and_analyze(days=90)
+    run_and_analyze(days=600)

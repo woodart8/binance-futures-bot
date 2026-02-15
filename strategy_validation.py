@@ -7,7 +7,7 @@ from data import fetch_ohlcv_history
 
 def validate_strategy() -> bool:
     exchange = get_public_exchange()
-    df = fetch_ohlcv_history(exchange, days=90)
+    df = fetch_ohlcv_history(exchange, days=600)
     if df.empty:
         return False
     days = (df["timestamp"].iloc[-1] - df["timestamp"].iloc[0]).days
