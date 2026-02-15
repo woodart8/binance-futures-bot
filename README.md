@@ -31,8 +31,8 @@
 ### 3.1 횡보장 판별 (15분봉)
 
 - 최근 **REGIME_LOOKBACK_15M(96)** 개 15분봉으로 박스권 판별.
-- **박스 하·상단**: 해당 구간 저가 최솟값 = 하단, 고가 최댓값 = 상단.
-- **조건**: 박스 폭 1.5% 이상, 현재가가 박스 내, 상·하단 각 2회 이상 터치.
+- **박스 하·상단**: 해당 구간 **종가** 최솟값 = 하단, **종가** 최댓값 = 상단.
+- **조건**: 박스 폭 1.5% 이상, 상·하단 봉간격 최소 1, 현재가가 박스 내, 상·하단 각 2회 이상 터치(인접 봉 가능, 같은 봉만 아니면 됨).
 
 ### 3.2 진입·청산
 
@@ -74,41 +74,7 @@
 
 ---
 
-## 6. 설정 요약 (config.py)
-
-- **SYMBOL**: BTC/USDT · **TIMEFRAME**: 5m · **LEVERAGE**: 6 · **POSITION_SIZE_PERCENT**: 0.25  
-- **DAILY_LOSS_LIMIT_PCT**: 5.0 · **CONSECUTIVE_LOSS_LIMIT**: 4  
-- 추세: TREND_PROFIT_TARGET 5%, TREND_STOP_LOSS 2.5%  
-- 횡보: SIDEWAYS_PROFIT_TARGET 2.5%, SIDEWAYS_STOP_LOSS 2%
-
----
-
-## 7. 실행
-
-| 목적 | 명령 |
-|------|------|
-| **백테스트·분석** | `python analyze_backtest.py` (기본 365일) |
-| **기간 지정** | `python analyze_backtest.py 90` (90일) |
-| **페이퍼 트레이딩** | `python paper_trading.py` (퍼블릭 데이터만 사용 가능) |
-| **실거래** | `python live_trader_agent.py` (.env에 API_KEY, SECRET_KEY 필요) |
-| **일일 매매 리포트 이메일** | `python daily_report.py` (cron 등으로 매일 09:00 KST 권장) |
-
-### 7.1 일일 리포트 이메일
-
-- **설정**: `.env`에 `EMAIL_TO`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` 설정.
-- **내용**: 전날(한국시간) `trades_log.csv` 기준 거래 건별 상세(시간, 방향, 진입가, 청산가, 수익률, 손익, 잔고, 장세, 청산사유) 및 일별 요약.
-
----
-
-## 8. API·로그
-
-- **타임아웃**: 60초. OHLCV 조회는 타임아웃/네트워크 오류 시 최대 3회 재시도(2초 간격).
-- **실거래**: OHLCV가 30회 연속 실패 시 프로세스 종료(재실행 필요).
-- **박스권 로그**: 횡보장 시 5분 로그·진입 로그에 박스 하단/상단 가격 표시. 진입안함 사유에도 박스 하단/상단 포함.
-
----
-
-## 9. 주요 파일
+## 6. 주요 파일
 
 - **strategy_core.py** — 장세 판별, 진입 신호, 진입/보유 사유 문자열  
 - **exit_logic.py** — 목표익절·손절·스탑로스·박스 이탈 청산  

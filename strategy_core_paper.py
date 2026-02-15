@@ -47,14 +47,9 @@ def detect_market_regime(
             pct = box_range / box_low * 100
             if pct >= SIDEWAYS_BOX_RANGE_PCT_MIN and box_range >= SIDEWAYS_BOX_RANGE_MIN and box_low <= price <= box_high:
                 recent = price_history[-period:]
-                top_touch_prices = [p for p in recent if abs(p - box_high) / box_high < BOX_TOUCH_THRESHOLD]
-                bottom_touch_prices = [p for p in recent if abs(p - box_low) / box_low < BOX_TOUCH_THRESHOLD]
-                top_touches = len(top_touch_prices)
-                bottom_touches = len(bottom_touch_prices)
-                top_spread = (max(top_touch_prices) - min(top_touch_prices)) if len(top_touch_prices) >= 2 else 0
-                bottom_spread = (max(bottom_touch_prices) - min(bottom_touch_prices)) if len(bottom_touch_prices) >= 2 else 0
-                if (top_touches >= SIDEWAYS_MIN_TOUCHES and bottom_touches >= SIDEWAYS_MIN_TOUCHES
-                        and top_spread >= SIDEWAYS_BOX_RANGE_MIN and bottom_spread >= SIDEWAYS_BOX_RANGE_MIN):
+                top_touches = sum(1 for p in recent if abs(p - box_high) / box_high < BOX_TOUCH_THRESHOLD)
+                bottom_touches = sum(1 for p in recent if abs(p - box_low) / box_low < BOX_TOUCH_THRESHOLD)
+                if top_touches >= SIDEWAYS_MIN_TOUCHES and bottom_touches >= SIDEWAYS_MIN_TOUCHES:
                     return "sideways"
 
     return "neutral"
@@ -75,15 +70,9 @@ def _validate_sideways_box(
     pct = box_range / box_low * 100
     if pct < SIDEWAYS_BOX_RANGE_PCT_MIN or not (box_low <= price <= box_high):
         return None
-    top_touch_prices = [p for p in recent if abs(p - box_high) / box_high < BOX_TOUCH_THRESHOLD]
-    bottom_touch_prices = [p for p in recent if abs(p - box_low) / box_low < BOX_TOUCH_THRESHOLD]
-    top_touches = len(top_touch_prices)
-    bottom_touches = len(bottom_touch_prices)
+    top_touches = sum(1 for p in recent if abs(p - box_high) / box_high < BOX_TOUCH_THRESHOLD)
+    bottom_touches = sum(1 for p in recent if abs(p - box_low) / box_low < BOX_TOUCH_THRESHOLD)
     if top_touches < SIDEWAYS_MIN_TOUCHES or bottom_touches < SIDEWAYS_MIN_TOUCHES:
-        return None
-    top_spread = (max(top_touch_prices) - min(top_touch_prices)) if len(top_touch_prices) >= 2 else 0
-    bottom_spread = (max(bottom_touch_prices) - min(bottom_touch_prices)) if len(bottom_touch_prices) >= 2 else 0
-    if top_spread < SIDEWAYS_BOX_RANGE_MIN or bottom_spread < SIDEWAYS_BOX_RANGE_MIN:
         return None
     pos = (price - box_low) / box_range
     return (box_high, box_low, box_range, pos)
