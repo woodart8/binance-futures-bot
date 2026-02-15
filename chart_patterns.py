@@ -464,78 +464,6 @@ def detect_rising_wedge(
     )
 
 
-def detect_bull_flag(
-    highs: List[float], lows: List[float], closes: List[float], current_price: float
-) -> Optional[ChartPattern]:
-    """불 플래그: 상승 폴대 후 하락 채널(숏타임) 돌파 시 LONG. 목표=폴 높이만큼 위로."""
-    if len(highs) < PATTERN_LOOKBACK:
-        return None
-    recent_highs = highs[-PATTERN_LOOKBACK:]
-    recent_lows = lows[-PATTERN_LOOKBACK:]
-    swing_highs = _find_swing_highs(recent_highs)
-    swing_lows = _find_swing_lows(recent_lows)
-    if len(swing_highs) < 2 or len(swing_lows) < 2:
-        return None
-    # 폴: 이전 저점에서 최근 고점까지 상승
-    pole_start = min(l for _, l in swing_lows[-3:]) if len(swing_lows) >= 2 else min(recent_lows)
-    pole_end = max(h for _, h in swing_highs[-2:])
-    if pole_end <= pole_start:
-        return None
-    pole_height = pole_end - pole_start
-    if pole_height / pole_start < MIN_PATTERN_HEIGHT_PCT / 100:
-        return None
-    # 플래그: 최근 구간에서 약한 하락 채널(낮은 고점) 후 저항선 = 최근 고점대
-    flag_high = max(recent_highs[-20:]) if len(recent_highs) >= 20 else max(recent_highs)
-    if current_price <= flag_high:
-        return None
-    target = current_price + pole_height
-    stop = min(recent_lows[-15:]) * 0.995 if len(recent_lows) >= 15 else min(recent_lows) * 0.995
-    return ChartPattern(
-        name="bull_flag",
-        side="LONG",
-        entry_price=current_price,
-        target_price=target,
-        stop_price=stop,
-        neckline=flag_high,
-        pattern_height=pole_height,
-    )
-
-
-def detect_bear_flag(
-    highs: List[float], lows: List[float], closes: List[float], current_price: float
-) -> Optional[ChartPattern]:
-    """베어 플래그: 하락 폴대 후 상승 채널(숏타임) 이탈 시 SHORT. 목표=폴 높이만큼 아래."""
-    if len(highs) < PATTERN_LOOKBACK:
-        return None
-    recent_highs = highs[-PATTERN_LOOKBACK:]
-    recent_lows = lows[-PATTERN_LOOKBACK:]
-    swing_highs = _find_swing_highs(recent_highs)
-    swing_lows = _find_swing_lows(recent_lows)
-    if len(swing_highs) < 2 or len(swing_lows) < 2:
-        return None
-    pole_start = max(h for _, h in swing_highs[-3:]) if len(swing_highs) >= 2 else max(recent_highs)
-    pole_end = min(l for _, l in swing_lows[-2:])
-    if pole_end >= pole_start:
-        return None
-    pole_height = pole_start - pole_end
-    if pole_height / pole_start < MIN_PATTERN_HEIGHT_PCT / 100:
-        return None
-    flag_low = min(recent_lows[-20:]) if len(recent_lows) >= 20 else min(recent_lows)
-    if current_price >= flag_low:
-        return None
-    target = current_price - pole_height
-    stop = max(recent_highs[-15:]) * 1.005 if len(recent_highs) >= 15 else max(recent_highs) * 1.005
-    return ChartPattern(
-        name="bear_flag",
-        side="SHORT",
-        entry_price=current_price,
-        target_price=target,
-        stop_price=stop,
-        neckline=flag_low,
-        pattern_height=pole_height,
-    )
-
-
 # ---------- 하모닉 패턴 (XABCD, 피보나치 비율) ----------
 
 
@@ -937,7 +865,7 @@ def detect_harmonic_crab(
 def detect_chart_pattern(
     highs: List[float], lows: List[float], closes: List[float], current_price: float
 ) -> Optional[ChartPattern]:
-    # 우선순위: 더블 → 삼각형 → 쐐기 → 플래그 → 하모닉 → H&S
+    # 우선순위: 더블 → 삼각형 → 쐐기 → H&S → 하모닉
     detectors = [
         detect_double_top,
         detect_double_bottom,
@@ -946,8 +874,6 @@ def detect_chart_pattern(
         detect_symmetrical_triangle,
         detect_falling_wedge,
         detect_rising_wedge,
-        detect_bull_flag,
-        detect_bear_flag,
         detect_head_and_shoulders_top,
         detect_inverse_head_and_shoulders,
         detect_harmonic_gartley,
