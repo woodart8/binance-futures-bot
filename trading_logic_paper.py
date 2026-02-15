@@ -28,7 +28,7 @@ from config import (
 )
 from data import compute_regime_15m
 from chart_patterns import detect_chart_pattern, PATTERN_LOOKBACK
-from strategy_core import REGIME_KR, swing_strategy_signal, get_hold_reason, get_entry_reason
+from strategy_core import REGIME_KR, swing_strategy_signal, get_hold_reason, get_entry_reason, get_sideways_box_bounds
 from exit_logic import check_long_exit, check_short_exit, reason_to_display_message
 from trade_logger import log_trade
 from logger import log
@@ -223,8 +223,9 @@ def open_position(
     box_high_entry = 0.0
     box_low_entry = 0.0
     if regime == "sideways" and price_history_15m and len(price_history_15m) >= REGIME_LOOKBACK_15M:
-        box_high_entry = max(price_history_15m[-REGIME_LOOKBACK_15M:])
-        box_low_entry = min(price_history_15m[-REGIME_LOOKBACK_15M:])
+        bounds = get_sideways_box_bounds(price_history_15m, REGIME_LOOKBACK_15M)
+        if bounds:
+            box_high_entry, box_low_entry = bounds
 
     if side == "LONG":
         state.has_long_position = True
@@ -386,7 +387,11 @@ def try_paper_entry(state: PaperState, df: pd.DataFrame, current_price: float) -
         regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, _, _, _ = compute_regime_15m(df, current_price)
     else:
         regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m = "neutral", 0.0, 0.0, 0.0, 0.0, []
-    price_history = df["close"].tail(SIDEWAYS_BOX_PERIOD + 1).tolist() if len(df) >= SIDEWAYS_BOX_PERIOD else None
+    if len(df) >= SIDEWAYS_BOX_PERIOD:
+        tail = df.tail(SIDEWAYS_BOX_PERIOD + 1)
+        price_history = list(zip(tail["high"].tolist(), tail["low"].tolist(), tail["close"].tolist()))
+    else:
+        price_history = None
     use_15m = len(price_history_15m) >= REGIME_LOOKBACK_15M
     regime_price_hist = price_history_15m if (use_15m and regime == "sideways") else None
 
@@ -503,7 +508,11 @@ def apply_strategy_on_candle(
     has_position = state.has_long_position or state.has_short_position
     is_long = state.has_long_position
 
-    price_history = df["close"].tail(SIDEWAYS_BOX_PERIOD + 1).tolist() if df is not None and len(df) >= SIDEWAYS_BOX_PERIOD else None
+    if df is not None and len(df) >= SIDEWAYS_BOX_PERIOD:
+        tail = df.tail(SIDEWAYS_BOX_PERIOD + 1)
+        price_history = list(zip(tail["high"].tolist(), tail["low"].tolist(), tail["close"].tolist()))
+    else:
+        price_history = None
 
     use_15m = len(price_history_15m) >= REGIME_LOOKBACK_15M
     rsi_prev = float(df["rsi"].iloc[-2]) if df is not None and len(df) >= 2 else None

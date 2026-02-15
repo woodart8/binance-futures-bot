@@ -13,7 +13,7 @@ sys.modules["strategy_core"] = strategy_core_paper
 from exchange_client import get_public_exchange
 from data import fetch_ohlcv, compute_regime_15m
 from config_common import REGIME_LOOKBACK_15M, SIDEWAYS_BOX_RANGE_PCT_MIN, SIDEWAYS_MIN_TOUCHES
-from strategy_core_paper import BOX_TOUCH_THRESHOLD
+from strategy_core_paper import BOX_TOUCH_THRESHOLD, get_sideways_box_bounds
 
 def main():
     exchange = get_public_exchange()
@@ -34,14 +34,21 @@ def main():
 
     period = REGIME_LOOKBACK_15M
 
-    # 박스 계산
+    # 박스 계산: 간격 2시간 이상인 고가 2개 → 상단, 저가 2개 → 하단
     recent = price_history_15m[-period:]
-    box_high = max(recent)
-    box_low = min(recent)
+    pair = get_sideways_box_bounds(price_history_15m, period)
+    if not pair:
+        print("박스 미충족: 간격 2시간 이상인 고가 2개/저가 2개를 찾지 못함")
+        return
+    box_high, box_low = pair
+    if recent and isinstance(recent[0], (list, tuple)):
+        top_touches = sum(1 for x in recent if abs(x[0] - box_high) / box_high < BOX_TOUCH_THRESHOLD)
+        bottom_touches = sum(1 for x in recent if abs(x[1] - box_low) / box_low < BOX_TOUCH_THRESHOLD)
+    else:
+        top_touches = sum(1 for p in recent if abs(p - box_high) / box_high < BOX_TOUCH_THRESHOLD)
+        bottom_touches = sum(1 for p in recent if abs(p - box_low) / box_low < BOX_TOUCH_THRESHOLD)
     box_range = box_high - box_low
     box_range_pct = (box_range / box_low * 100) if box_low > 0 else 0
-    top_touches = sum(1 for p in recent if abs(p - box_high) / box_high < BOX_TOUCH_THRESHOLD)
-    bottom_touches = sum(1 for p in recent if abs(p - box_low) / box_low < BOX_TOUCH_THRESHOLD)
     price_in_box = box_low <= current_price <= box_high
 
     print("=" * 60)
@@ -50,14 +57,13 @@ def main():
     print(f"현재가: {current_price:,.2f}")
     print(f"기간: 15분봉 {REGIME_LOOKBACK_15M}개 = 24시간")
     print()
-    print("[박스(횡보) 조건]")
+    print("[박스(횡보) 조건] (간격 2시간 이상인 고가 2개→상단, 저가 2개→하단)")
     print(f"  박스 고가(box_high): {box_high:,.2f}")
     print(f"  박스 저가(box_low):  {box_low:,.2f}")
     print(f"  박스 범위: {box_range:,.2f} ({box_range_pct:.2f}%)")
-    print(f"  조건: 범위 >= {SIDEWAYS_BOX_RANGE_PCT_MIN}%  ->  {box_range_pct >= SIDEWAYS_BOX_RANGE_PCT_MIN}")
-    print(f"  조건: 가격 in [box_low, box_high]  ->  {price_in_box}  (box_low~box_high 안에 현재가)")
-    print(f"  상단 터치(고가의 {BOX_TOUCH_THRESHOLD*100:.1f}% 이내 봉 수): {top_touches}  (필요: >={SIDEWAYS_MIN_TOUCHES})")
-    print(f"  하단 터치(저가의 {BOX_TOUCH_THRESHOLD*100:.1f}% 이내 봉 수): {bottom_touches}  (필요: >={SIDEWAYS_MIN_TOUCHES})")
+    print(f"  조건: 범위 >= {SIDEWAYS_BOX_RANGE_PCT_MIN}%, 가격 in [box_low, box_high], 기울기 0.5% 이내·상하단 비슷 (터치 조건 없음)")
+    print(f"  범위 충족: {box_range_pct >= SIDEWAYS_BOX_RANGE_PCT_MIN}  |  가격 in 박스: {price_in_box}")
+    print(f"  참고: 상단 터치 봉 수={top_touches}, 하단 터치 봉 수={bottom_touches} (판정 미사용)")
     print()
     print("[15분봉 MA (추세 방향)]")
     print(f"  MA7:  {short_ma:,.2f}")
@@ -69,18 +75,14 @@ def main():
     print("[판정 결과]")
     print(f"  regime = {regime!r}  (sideways=횡보장, neutral=추세장)")
     if regime == "sideways":
-        print("  -> 위 박스 조건 4개 모두 충족하여 횡보장으로 판정됨.")
+        print("  -> 박스(2점+기울기)·범위·가격 조건 충족하여 횡보장으로 판정됨.")
     else:
         reasons = []
         if box_range_pct < SIDEWAYS_BOX_RANGE_PCT_MIN:
             reasons.append(f"박스 범위 부족 ({box_range_pct:.2f}% < {SIDEWAYS_BOX_RANGE_PCT_MIN}%)")
         if not price_in_box:
             reasons.append("현재가가 박스 밖")
-        if top_touches < SIDEWAYS_MIN_TOUCHES:
-            reasons.append(f"상단 터치 부족 ({top_touches} < {SIDEWAYS_MIN_TOUCHES})")
-        if bottom_touches < SIDEWAYS_MIN_TOUCHES:
-            reasons.append(f"하단 터치 부족 ({bottom_touches} < {SIDEWAYS_MIN_TOUCHES})")
-        print("  -> 추세장(neutral)으로 판정. 미충족:", ", ".join(reasons) if reasons else "-")
+        print("  -> 추세장(neutral)으로 판정. 미충족:", ", ".join(reasons) if reasons else "(2점/기울기 조건 등)")
     print("=" * 60)
 
 if __name__ == "__main__":

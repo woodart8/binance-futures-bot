@@ -76,7 +76,12 @@ def compute_regime_15m(df: pd.DataFrame, current_price: float) -> tuple:
     if len(df_15m) < REGIME_LOOKBACK_15M:
         return ("neutral", 0.0, 0.0, 0.0, 0.0, [], None, None, None)
     last = df_15m.iloc[-1]
-    price_history_15m = df_15m["close"].tail(REGIME_LOOKBACK_15M).tolist()
+    tail = df_15m.tail(REGIME_LOOKBACK_15M)
+    price_history_15m = list(zip(
+        tail["high"].tolist(),
+        tail["low"].tolist(),
+        tail["close"].tolist(),
+    ))
     short_ma_15m = float(last["ma_short"])
     long_ma_15m = float(last["ma_long"])
     ma_50_15m = float(last["ma_50"])

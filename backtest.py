@@ -32,7 +32,7 @@ from config import (
 )
 from indicators import calculate_rsi, calculate_ma, calculate_macd
 from exit_logic import check_long_exit, check_short_exit, reason_to_display_message
-from strategy_core import swing_strategy_signal, detect_market_regime
+from strategy_core import swing_strategy_signal, detect_market_regime, get_sideways_box_bounds
 from chart_patterns import detect_chart_pattern, ChartPattern, PATTERN_LOOKBACK
 
 
@@ -225,7 +225,9 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
             long_ma_15m = float(df_15m.iloc[idx_15m]["ma_long"])
             ma_50_15m = float(df_15m.iloc[idx_15m]["ma_50"])
             ma_100_15m = float(df_15m.iloc[idx_15m]["ma_100"])
-            price_history_15m = closes_15m[max(0, idx_15m - REGIME_LOOKBACK_15M + 1) : idx_15m + 1].tolist()
+            start_15m = max(0, idx_15m - REGIME_LOOKBACK_15M + 1)
+            seg_15m = df_15m.iloc[start_15m : idx_15m + 1]
+            price_history_15m = list(zip(seg_15m["high"].tolist(), seg_15m["low"].tolist(), seg_15m["close"].tolist()))
             if len(price_history_15m) >= REGIME_LOOKBACK_15M:
                 current_regime = detect_market_regime(
                     short_ma_15m, long_ma_15m, price, ma_50_15m, ma_100_15m,
@@ -430,11 +432,13 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
         # 전략 신호 생성 (regime은 5분봉 기반)
         regime = current_regime
         
-        # 박스권 판단: 횡보 시 15분봉, 그 외 5분봉 (단타 시그널용)
+        # 박스권 판단: 고가/저가/종가 (h,l,c) 리스트
         if i >= SIDEWAYS_BOX_PERIOD:
-            price_history = close_prices[i - SIDEWAYS_BOX_PERIOD:i + 1].tolist()
+            seg = df.iloc[i - SIDEWAYS_BOX_PERIOD:i + 1]
+            price_history = list(zip(seg["high"].tolist(), seg["low"].tolist(), seg["close"].tolist()))
         else:
-            price_history = close_prices[:i + 1].tolist()
+            seg = df.iloc[:i + 1]
+            price_history = list(zip(seg["high"].tolist(), seg["low"].tolist(), seg["close"].tolist()))
         
         # 일일 손실 한도: 날짜 변경 시 daily_start_balance 갱신
         ts = row.get("timestamp")
@@ -504,8 +508,9 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
             box_high_entry = 0.0
             box_low_entry = 0.0
             if regime == "sideways" and use_15m_sideways:
-                box_high_entry = max(price_history_15m[-REGIME_LOOKBACK_15M:])
-                box_low_entry = min(price_history_15m[-REGIME_LOOKBACK_15M:])
+                bounds = get_sideways_box_bounds(price_history_15m, REGIME_LOOKBACK_15M)
+                if bounds:
+                    box_high_entry, box_low_entry = bounds
             
             has_position = True
             is_long = True
@@ -533,8 +538,9 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
             box_high_entry = 0.0
             box_low_entry = 0.0
             if regime == "sideways" and use_15m_sideways:
-                box_high_entry = max(price_history_15m[-REGIME_LOOKBACK_15M:])
-                box_low_entry = min(price_history_15m[-REGIME_LOOKBACK_15M:])
+                bounds = get_sideways_box_bounds(price_history_15m, REGIME_LOOKBACK_15M)
+                if bounds:
+                    box_high_entry, box_low_entry = bounds
             
             has_position = True
             is_long = False

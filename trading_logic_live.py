@@ -21,7 +21,7 @@ from config import (
 )
 from data import compute_regime_15m
 from chart_patterns import detect_chart_pattern, PATTERN_LOOKBACK
-from strategy_core import REGIME_KR, swing_strategy_signal
+from strategy_core import REGIME_KR, swing_strategy_signal, get_sideways_box_bounds
 from exit_logic import check_long_exit, check_short_exit
 from trade_logger import log_trade
 from logger import log
@@ -245,7 +245,11 @@ def try_live_entry(exchange, state: Dict[str, Any], df: pd.DataFrame, current_pr
         regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, _, _, _ = compute_regime_15m(df, current_price)
     else:
         regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m = "neutral", 0.0, 0.0, 0.0, 0.0, []
-    price_history = df["close"].tail(SIDEWAYS_BOX_PERIOD + 1).tolist() if len(df) >= SIDEWAYS_BOX_PERIOD else df["close"].tolist()
+    if len(df) >= SIDEWAYS_BOX_PERIOD:
+        tail = df.tail(SIDEWAYS_BOX_PERIOD + 1)
+        price_history = list(zip(tail["high"].tolist(), tail["low"].tolist(), tail["close"].tolist()))
+    else:
+        price_history = df["close"].tolist()
     use_15m = len(price_history_15m) >= REGIME_LOOKBACK_15M
     regime_price_hist = price_history_15m if (use_15m and regime == "sideways") else None
 
@@ -333,12 +337,14 @@ def try_live_entry(exchange, state: Dict[str, Any], df: pd.DataFrame, current_pr
                 st = current_price * (1 - sl_pct / 100 * pct_per_leverage)
                 entry_tp_sl = f" 목표가={tg:.2f} 손절가={st:.2f}"
             box_str = ""
-            if regime == "sideways" and use_15m and len(price_history_15m) >= REGIME_LOOKBACK_15M:
-                bh, bl = max(price_history_15m[-REGIME_LOOKBACK_15M:]), min(price_history_15m[-REGIME_LOOKBACK_15M:])
+            bounds = get_sideways_box_bounds(price_history_15m, REGIME_LOOKBACK_15M) if regime == "sideways" and use_15m and len(price_history_15m) >= REGIME_LOOKBACK_15M else None
+            if bounds:
+                bh, bl = bounds
                 box_str = f" 박스 하단={bl:.2f} 상단={bh:.2f}"
+                box_high_entry, box_low_entry = bh, bl
+            else:
+                box_high_entry, box_low_entry = 0.0, 0.0
             log(f"LONG 진입 | {regime_kr} | 가격={current_price:.2f} 잔고={balance:.2f} 투입={order_usdt:.2f} USDT{entry_tp_sl}{box_str}")
-            box_high_entry = max(price_history_15m[-REGIME_LOOKBACK_15M:]) if regime == "sideways" and use_15m and len(price_history_15m) >= REGIME_LOOKBACK_15M else 0.0
-            box_low_entry = min(price_history_15m[-REGIME_LOOKBACK_15M:]) if regime == "sideways" and use_15m and len(price_history_15m) >= REGIME_LOOKBACK_15M else 0.0
             new_state = {
                 **state,
                 "has_position": True,
@@ -373,12 +379,14 @@ def try_live_entry(exchange, state: Dict[str, Any], df: pd.DataFrame, current_pr
                 st = current_price * (1 + sl_pct / 100 * pct_per_leverage)
                 entry_tp_sl = f" 목표가={tg:.2f} 손절가={st:.2f}"
             box_str = ""
-            if regime == "sideways" and use_15m and len(price_history_15m) >= REGIME_LOOKBACK_15M:
-                bh, bl = max(price_history_15m[-REGIME_LOOKBACK_15M:]), min(price_history_15m[-REGIME_LOOKBACK_15M:])
+            bounds = get_sideways_box_bounds(price_history_15m, REGIME_LOOKBACK_15M) if regime == "sideways" and use_15m and len(price_history_15m) >= REGIME_LOOKBACK_15M else None
+            if bounds:
+                bh, bl = bounds
                 box_str = f" 박스 하단={bl:.2f} 상단={bh:.2f}"
+                box_high_entry, box_low_entry = bh, bl
+            else:
+                box_high_entry, box_low_entry = 0.0, 0.0
             log(f"SHORT 진입 | {regime_kr} | 가격={current_price:.2f} 잔고={balance:.2f} 투입={order_usdt:.2f} USDT{entry_tp_sl}{box_str}")
-            box_high_entry = max(price_history_15m[-REGIME_LOOKBACK_15M:]) if regime == "sideways" and use_15m and len(price_history_15m) >= REGIME_LOOKBACK_15M else 0.0
-            box_low_entry = min(price_history_15m[-REGIME_LOOKBACK_15M:]) if regime == "sideways" and use_15m and len(price_history_15m) >= REGIME_LOOKBACK_15M else 0.0
             new_state = {
                 **state,
                 "has_position": True,
@@ -439,7 +447,11 @@ def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tu
     else:
         regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m = "neutral", 0.0, 0.0, 0.0, 0.0, []
 
-    price_history = df["close"].tail(SIDEWAYS_BOX_PERIOD + 1).tolist() if len(df) >= SIDEWAYS_BOX_PERIOD else df["close"].tolist()
+    if len(df) >= SIDEWAYS_BOX_PERIOD:
+        tail = df.tail(SIDEWAYS_BOX_PERIOD + 1)
+        price_history = list(zip(tail["high"].tolist(), tail["low"].tolist(), tail["close"].tolist()))
+    else:
+        price_history = df["close"].tolist()
     use_15m = len(price_history_15m) >= REGIME_LOOKBACK_15M
 
     signal = None
@@ -629,7 +641,8 @@ def log_5m_status(exchange, state: Dict[str, Any], df: pd.DataFrame) -> None:
     elif not has_position and len(df) >= REGIME_LOOKBACK_15M * 3:
         regime, _, _, _, _, price_history_15m, _, _, _ = compute_regime_15m(df, price)
         if regime == "sideways" and price_history_15m and len(price_history_15m) >= REGIME_LOOKBACK_15M:
-            bh = max(price_history_15m[-REGIME_LOOKBACK_15M:])
-            bl = min(price_history_15m[-REGIME_LOOKBACK_15M:])
-            box_str = f" | 박스 하단={bl:.2f} 상단={bh:.2f}"
+            bounds = get_sideways_box_bounds(price_history_15m, REGIME_LOOKBACK_15M)
+            if bounds:
+                bh, bl = bounds
+                box_str = f" | 박스 하단={bl:.2f} 상단={bh:.2f}"
     log(f"[5분] {pos_status}{regime_str}{box_str} | 가격={price:.2f} RSI={rsi:.0f} 잔고={bal:.2f}{unrealized}")
