@@ -2,6 +2,9 @@
 
 from config_common import *  # noqa: F401, F403
 
+# 모의투자 잔고 저장 파일 (수익/손실 시 자동 갱신)
+PAPER_BALANCE_FILE = "paper_balance.json"
+
 # 필요 시 페이퍼 전용으로 override
 # LEVERAGE = 6
 # POSITION_SIZE_PERCENT = 0.25

@@ -1,6 +1,7 @@
 .env
 trades_log.csv
 paper_trade.log
+paper_balance.json
 __pycache__/
 *.pyc
 .venv/

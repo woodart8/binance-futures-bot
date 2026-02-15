@@ -1,11 +1,14 @@
 """페이퍼 트레이딩 전용 전략/청산/진입 로직. paper_trading.py에서만 사용."""
 
+import json
+import os
 import time
 from dataclasses import dataclass
 from typing import Optional
 
 import pandas as pd
 
+import config as _config
 from config import (
     CONSECUTIVE_LOSS_LIMIT,
     DAILY_LOSS_LIMIT_PCT,
@@ -34,6 +37,39 @@ RISK_PER_TRADE = POSITION_SIZE_PERCENT
 REASON_LOG_INTERVAL = 300
 _daily_limit_logged_date: str = ""
 _last_reason_log_time: float = 0.0
+
+
+def _paper_balance_path() -> str:
+    fname = getattr(_config, "PAPER_BALANCE_FILE", "paper_balance.json")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), fname)
+
+
+def load_paper_balance() -> float:
+    """저장된 모의투자 잔고를 읽는다. 없거나 유효하지 않으면 INITIAL_BALANCE 반환."""
+    path = _paper_balance_path()
+    if not os.path.isfile(path):
+        return INITIAL_BALANCE
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        balance = float(data.get("balance", 0))
+        if balance <= 0:
+            return INITIAL_BALANCE
+        return balance
+    except (json.JSONDecodeError, OSError, TypeError, ValueError):
+        return INITIAL_BALANCE
+
+
+def save_paper_balance(balance: float) -> None:
+    """모의투자 잔고를 파일에 저장(수익/손실 청산 시 호출)."""
+    path = _paper_balance_path()
+    try:
+        from datetime import datetime
+        data = {"balance": round(balance, 2), "updated_at": datetime.utcnow().isoformat() + "Z"}
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        log(f"잔고 저장 실패: {path} - {e}", "ERROR")
 
 
 def _log_daily_limit_once(current_date: str, daily_loss_pct: float, regime_kr: str = "") -> None:
@@ -79,7 +115,7 @@ class PaperState:
 
 
 def init_state() -> PaperState:
-    balance = INITIAL_BALANCE
+    balance = load_paper_balance()
     return PaperState(
         balance=balance,
         equity=balance,
@@ -100,7 +136,7 @@ def init_state() -> PaperState:
         pattern_type="",
         pattern_target=0.0,
         pattern_stop=0.0,
-        daily_start_balance=INITIAL_BALANCE,
+        daily_start_balance=balance,
         daily_start_date="",
         consecutive_loss_count=0,
     )
@@ -160,6 +196,7 @@ def close_position(state: PaperState, candle: pd.Series, side: str, reason: str)
     )
     kr = REGIME_KR.get(entry_regime, entry_regime or "?")
     log(f"{side} 청산 | {kr} | {reason} | 진입={entry_price:.2f} 청산={price:.2f} 수익률={pnl_pct*100:+.2f}% 손익={net_pnl:+.2f} 잔고={state.balance:.2f}")
+    save_paper_balance(state.balance)
 
 
 def open_position(
