@@ -43,14 +43,15 @@ from trading_logic_live import (
 OHLCV_CONSECUTIVE_FAILURE_LIMIT = 30
 
 
-def set_leverage(exchange) -> None:
+def set_leverage_and_margin(exchange) -> None:
     market = exchange.market(SYMBOL)
     exchange.set_leverage(LEVERAGE, market["id"])
+    exchange.set_margin_mode("isolated", market["id"])
 
 
 def main() -> None:
     exchange = get_private_exchange()
-    set_leverage(exchange)
+    set_leverage_and_margin(exchange)
 
     state = init_live_state()
     ohlcv_failure_count = 0
