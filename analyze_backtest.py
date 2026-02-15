@@ -1,5 +1,6 @@
 """백테스트 장별 분석."""
 
+from typing import Optional
 import pandas as pd
 
 from backtest import run_backtest
@@ -86,6 +87,33 @@ def analyze_by_reason(trade_details: list) -> dict:
     return by_reason
 
 
+def _parse_pattern_name(reason: str) -> Optional[str]:
+    """'패턴익절(double_bottom)' -> 'double_bottom', '패턴손절(harmonic_gartley)' -> 'harmonic_gartley'."""
+    if not reason or (not reason.startswith("패턴익절") and not reason.startswith("패턴손절")):
+        return None
+    if "(" in reason and ")" in reason:
+        return reason.split("(")[1].rstrip(")").strip()
+    return ""
+
+
+def analyze_by_pattern(trade_details: list) -> dict:
+    """패턴 진입 거래만 골라 패턴명별 통계 (추가된 차트/하모닉 패턴 포함)."""
+    by_pattern = {}
+    for td in trade_details:
+        name = _parse_pattern_name(td.reason or "")
+        if name is None:
+            continue
+        key = name or "(패턴명없음)"
+        if key not in by_pattern:
+            by_pattern[key] = {"count": 0, "wins": 0, "total_pnl": 0.0}
+        d = by_pattern[key]
+        d["count"] += 1
+        d["total_pnl"] += td.pnl
+        if td.pnl > 0:
+            d["wins"] += 1
+    return by_pattern
+
+
 def run_and_analyze(days: int = 600) -> None:
     print(f"5분봉 {days}일치 데이터 수집 중...")
     exchange = get_public_exchange()
@@ -143,6 +171,27 @@ def run_and_analyze(days: int = 600) -> None:
         if s["short_count"] > 0:
             print(f"  숏: {s['short_count']}회, 승률 {s['short_win_rate']:.1f}%")
 
+    # 패턴 거래 (패턴 익절/손절로 청산된 거래만)
+    pattern_trades = [td for td in result.trade_details if (td.reason or "").startswith("패턴익절") or (td.reason or "").startswith("패턴손절")]
+    pattern_wins = sum(1 for td in pattern_trades if td.pnl > 0)
+    pattern_losses = len(pattern_trades) - pattern_wins
+    pattern_win_rate = (pattern_wins / len(pattern_trades) * 100) if pattern_trades else 0.0
+    pattern_pnl = sum(td.pnl for td in pattern_trades)
+    print("\n" + "=" * 60)
+    print("[패턴 거래]")
+    print("=" * 60)
+    print(f"  거래: {len(pattern_trades)}회 | 승: {pattern_wins} / 패: {pattern_losses} | 승률: {pattern_win_rate:.1f}% | 총손익: {pattern_pnl:+.2f} USDT")
+
+    # 패턴별 통계 (차트 패턴 + 하모닉 패턴)
+    pattern_stats = analyze_by_pattern(result.trade_details)
+    if pattern_stats:
+        print("\n" + "=" * 60)
+        print("[패턴별 통계]")
+        print("=" * 60)
+        for pname, d in sorted(pattern_stats.items(), key=lambda x: -x[1]["count"]):
+            wr = (d["wins"] / d["count"] * 100) if d["count"] > 0 else 0
+            print(f"  {pname}: {d['count']}회, 승률 {wr:.1f}%, 손익 {d['total_pnl']:+.2f} USDT")
+
     # 청산 사유별
     reason_stats = analyze_by_reason(result.trade_details)
     sum_reason_count = sum(d["count"] for d in reason_stats.values())
@@ -157,4 +206,6 @@ def run_and_analyze(days: int = 600) -> None:
 
 
 if __name__ == "__main__":
-    run_and_analyze(days=600)
+    import sys
+    days = int(sys.argv[1]) if len(sys.argv) > 1 else 365
+    run_and_analyze(days=days)

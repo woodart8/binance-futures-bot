@@ -16,6 +16,10 @@ from config import (
     RSI_PERIOD,
     SLIPPAGE_PCT,
     SIDEWAYS_BOX_PERIOD,
+    SIDEWAYS_PROFIT_TARGET,
+    SIDEWAYS_STOP_LOSS_PRICE,
+    TREND_PROFIT_TARGET,
+    TREND_STOP_LOSS_PRICE,
     MA_SHORT_PERIOD,
     MA_LONG_PERIOD,
     MA_MID_PERIOD,
@@ -226,7 +230,20 @@ def open_position(
         state.lowest_price = price
     
     kr = REGIME_KR.get(regime, regime or "?")
-    log(f"{side} 진입 | {kr} | {reason} | 가격={price:.2f} 잔고={state.balance:.2f} 투입={trade_capital:.2f}")
+    if pattern_target > 0 and pattern_stop > 0:
+        log(f"{side} 진입 | {kr} | {reason} | 가격={price:.2f} 잔고={state.balance:.2f} 투입={trade_capital:.2f} | 패턴={pattern_type} 목표가={pattern_target:.2f} 손절가={pattern_stop:.2f}")
+    else:
+        is_trend = regime == "neutral"
+        tp_pct = TREND_PROFIT_TARGET if is_trend else SIDEWAYS_PROFIT_TARGET
+        sl_pct = TREND_STOP_LOSS_PRICE if is_trend else SIDEWAYS_STOP_LOSS_PRICE
+        pct_per_leverage = 1.0 / LEVERAGE
+        if side == "LONG":
+            target_price = price * (1 + tp_pct / 100 * pct_per_leverage)
+            stop_price = price * (1 - sl_pct / 100 * pct_per_leverage)
+        else:
+            target_price = price * (1 - tp_pct / 100 * pct_per_leverage)
+            stop_price = price * (1 + sl_pct / 100 * pct_per_leverage)
+        log(f"{side} 진입 | {kr} | {reason} | 가격={price:.2f} 잔고={state.balance:.2f} 투입={trade_capital:.2f} | 목표가={target_price:.2f} 손절가={stop_price:.2f}")
 
 
 def _reason_no_exit_strategy(regime: str, is_long: bool, rsi: float, price: float, short_ma: float) -> str:
@@ -384,12 +401,19 @@ def apply_strategy_on_candle(
     daily_limit_hit = daily_loss_pct >= DAILY_LOSS_LIMIT_PCT
     consecutive_limit_hit = state.consecutive_loss_count >= CONSECUTIVE_LOSS_LIMIT
 
+    # 패턴 감지: 15분봉 72시간(288봉) 데이터 사용
     pattern_info = None
-    if df is not None and len(df) >= PATTERN_LOOKBACK and not has_position:
-        highs = df["high"].tolist()
-        lows = df["low"].tolist()
-        closes = df["close"].tolist()
-        pattern_info = detect_chart_pattern(highs, lows, closes, price)
+    if df is not None and len(df) >= PATTERN_LOOKBACK * 3 and not has_position:
+        df_tmp = df.copy()
+        df_tmp["timestamp"] = pd.to_datetime(df_tmp["timestamp"])
+        df_15m = df_tmp.set_index("timestamp").resample("15min").agg(
+            {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+        ).dropna()
+        if len(df_15m) >= PATTERN_LOOKBACK:
+            highs = df_15m["high"].iloc[-PATTERN_LOOKBACK:].tolist()
+            lows = df_15m["low"].iloc[-PATTERN_LOOKBACK:].tolist()
+            closes = df_15m["close"].iloc[-PATTERN_LOOKBACK:].tolist()
+            pattern_info = detect_chart_pattern(highs, lows, closes, price)
     
     if signal == "long" and not has_position:
         if daily_limit_hit or consecutive_limit_hit:
@@ -446,8 +470,12 @@ def apply_strategy_on_candle(
                 pattern_type=pt, pattern_target=ptg, pattern_stop=pst,
             )
     elif signal == "flat" and has_position:
-        side = "LONG" if is_long else "SHORT"
-        close_position(state, candle, side, f"단타청산({regime_kr})")
+        # 패턴 진입(패턴 익절/손절 대기 중)이면 추세 반전으로 청산하지 않음. 패턴 TP/SL만 적용.
+        if state.pattern_target > 0 and state.pattern_stop > 0:
+            pass  # 청산 안 함, check_scalp_stop_loss_and_profit에서 패턴 익절/손절만 처리
+        else:
+            side = "LONG" if is_long else "SHORT"
+            close_position(state, candle, side, f"단타청산({regime_kr})")
     else:
         if _should_log_reason():
             if not has_position:
@@ -511,8 +539,8 @@ def main() -> None:
 
     try:
         while True:
-            # 충분한 데이터 확보 (15분봉 24시간 = 96*3 = 288개 5분봉 필요)
-            limit = max(RSI_PERIOD, MA_LONGEST_PERIOD, REGIME_LOOKBACK_15M * 3) + 100
+            # 충분한 데이터 확보 (15분봉 72시간 패턴 = 288*3 = 864개 5분봉 필요)
+            limit = max(RSI_PERIOD, MA_LONGEST_PERIOD, REGIME_LOOKBACK_15M * 3, PATTERN_LOOKBACK * 3) + 100
             df = fetch_ohlcv(exchange, limit=limit)
             
             # 지표 계산

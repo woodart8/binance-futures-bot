@@ -477,12 +477,14 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
             macd_signal=None,
         )
         
-        # 차트 패턴 감지: 패턴+전략 방향 일치 시 패턴 TP/SL 적용
+        # 차트 패턴 감지: 15분봉 72시간(288봉) 데이터, 패턴+전략 방향 일치 시 패턴 TP/SL 적용
         chart_pattern = None
-        if i >= PATTERN_LOOKBACK and not has_position and not daily_limit_hit and not consecutive_limit_hit and (signal == "long" or signal == "short"):
-            highs_list = high_prices[i - PATTERN_LOOKBACK:i + 1].tolist()
-            lows_list = low_prices[i - PATTERN_LOOKBACK:i + 1].tolist()
-            closes_list = close_prices[i - PATTERN_LOOKBACK:i + 1].tolist()
+        idx_15m = min(i // 3, n_15m - 1) if n_15m > 0 else -1
+        if n_15m >= PATTERN_LOOKBACK and idx_15m >= PATTERN_LOOKBACK - 1 and not has_position and not daily_limit_hit and not consecutive_limit_hit and (signal == "long" or signal == "short"):
+            start_15m = idx_15m + 1 - PATTERN_LOOKBACK
+            highs_list = df_15m["high"].iloc[start_15m : idx_15m + 1].tolist()
+            lows_list = df_15m["low"].iloc[start_15m : idx_15m + 1].tolist()
+            closes_list = df_15m["close"].iloc[start_15m : idx_15m + 1].tolist()
             detected = detect_chart_pattern(highs_list, lows_list, closes_list, price)
             if detected is not None:
                 pattern_side_ok = (signal == "long" and detected.side == "LONG") or (signal == "short" and detected.side == "SHORT")
@@ -549,42 +551,48 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
                 entry_info["pattern_target"] = chart_pattern.target_price
                 entry_info["pattern_stop"] = chart_pattern.stop_price
         elif signal == "flat" and has_position:
-            # 전략 신호로 청산
-            if is_long:
-                pnl_pct = (price - entry_price) / entry_price * LEVERAGE * 100
+            # 패턴 진입(패턴 익절/손절 대기 중)이면 추세 반전으로 청산하지 않음. 패턴 TP/SL만 적용.
+            pt = entry_info.get("pattern_target")
+            ps = entry_info.get("pattern_stop")
+            if pt is not None and ps is not None:
+                pass  # 패턴 청산은 위에서만 처리
             else:
-                pnl_pct = (entry_price - price) / entry_price * LEVERAGE * 100
+                # 전략 신호로 청산
+                if is_long:
+                    pnl_pct = (price - entry_price) / entry_price * LEVERAGE * 100
+                else:
+                    pnl_pct = (entry_price - price) / entry_price * LEVERAGE * 100
 
-            remaining_pnl = pnl_pct / 100 * balance * current_position_size
-            fee = balance * current_position_size * FEE_RATE
-            net_pnl = remaining_pnl - fee
-            acc = entry_info.get("accumulated_partial_pnl", 0)
-            total_pnl = acc + net_pnl
-            balance += net_pnl
-            trades.append(total_pnl)
-            if total_pnl > 0:
-                wins.append(total_pnl)
-            else:
-                losses.append(total_pnl)
-            trade_details.append(TradeDetail(
-                side="LONG" if is_long else "SHORT",
-                entry_price=entry_info.get("entry_price", entry_price),
-                exit_price=price,
-                entry_time=entry_info.get("index", i),
-                exit_time=i,
-                pnl=total_pnl,
-                pnl_pct=pnl_pct,
-                entry_rsi=entry_info.get("rsi", rsi),
-                exit_rsi=rsi,
-                regime=entry_info.get("regime", regime),
-                reason="전략 신호"
-            ))
-            has_position = False
-            partial_profit_taken = False
-            trailing_stop_active = False
-            best_pnl_pct = 0.0
-            current_position_size = POSITION_SIZE_PERCENT
-            equity = balance
+                remaining_pnl = pnl_pct / 100 * balance * current_position_size
+                fee = balance * current_position_size * FEE_RATE
+                net_pnl = remaining_pnl - fee
+                acc = entry_info.get("accumulated_partial_pnl", 0)
+                total_pnl = acc + net_pnl
+                balance += net_pnl
+                trades.append(total_pnl)
+                if total_pnl > 0:
+                    wins.append(total_pnl)
+                else:
+                    losses.append(total_pnl)
+                trade_details.append(TradeDetail(
+                    side="LONG" if is_long else "SHORT",
+                    entry_price=entry_info.get("entry_price", entry_price),
+                    exit_price=price,
+                    entry_time=entry_info.get("index", i),
+                    exit_time=i,
+                    pnl=total_pnl,
+                    pnl_pct=pnl_pct,
+                    entry_rsi=entry_info.get("rsi", rsi),
+                    exit_rsi=rsi,
+                    regime=entry_info.get("regime", regime),
+                    reason="전략 신호"
+                ))
+                has_position = False
+                partial_profit_taken = False
+                trailing_stop_active = False
+                best_pnl_pct = 0.0
+                current_position_size = POSITION_SIZE_PERCENT
+                equity = balance
         
         # 평가손익 계산
         if has_position:

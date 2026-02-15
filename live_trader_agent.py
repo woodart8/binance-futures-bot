@@ -16,9 +16,13 @@ from config import (
     MA_MID_PERIOD,
     MA_LONGEST_PERIOD,
     SIDEWAYS_BOX_PERIOD,
+    SIDEWAYS_PROFIT_TARGET,
+    SIDEWAYS_STOP_LOSS_PRICE,
     SYMBOL,
     TIMEFRAME,
     REGIME_LOOKBACK_15M,
+    TREND_PROFIT_TARGET,
+    TREND_STOP_LOSS_PRICE,
     MACD_FAST,
     MACD_SLOW,
     MACD_SIGNAL,
@@ -75,7 +79,7 @@ def main() -> None:
         while True:
             try:
                 # 충분한 데이터 확보 (15분봉 24시간 = 96*3 = 288개 5분봉 필요)
-                limit = max(RSI_PERIOD, MA_LONGEST_PERIOD, REGIME_LOOKBACK_15M * 3) + 100
+                limit = max(RSI_PERIOD, MA_LONGEST_PERIOD, REGIME_LOOKBACK_15M * 3, PATTERN_LOOKBACK * 3) + 100
                 df = fetch_ohlcv(exchange, limit=limit)
             except Exception as e:
                 log(f"OHLCV 조회 실패: {e}", "ERROR")
@@ -223,76 +227,80 @@ def main() -> None:
                 consecutive_limit_hit = consecutive_loss_count >= CONSECUTIVE_LOSS_LIMIT
 
                 if has_position and signal == "flat":
-                    # 포지션 종료
-                    try:
-                        positions = exchange.fetch_positions([SYMBOL])
-                    except Exception as e:
-                        log(f"포지션 조회 실패: {e}", "ERROR")
-                        time.sleep(60)
-                        continue
-                    contracts = 0.0
-                    side_to_close = "long" if is_long else "short"
-                    for pos in positions:
-                        if pos.get("symbol") == SYMBOL and pos.get("side") == side_to_close:
-                            contracts = float(pos.get("contracts", 0) or 0)
-                            break
-
-                    if contracts > 0:
-                        try:
-                            if is_long:
-                                order = exchange.create_market_sell_order(
-                                    SYMBOL, contracts, {"reduceOnly": True}
-                                )
-                            else:
-                                order = exchange.create_market_buy_order(
-                                    SYMBOL, contracts, {"reduceOnly": True}
-                                )
-                            side_str = "LONG" if is_long else "SHORT"
-                            regime_kr = REGIME_KR.get(entry_regime, entry_regime)
-                            log(f"{side_str} 청산 | {regime_kr} | 진입={entry_price:.2f} 청산={price:.2f} 수익률={pnl_pct:+.2f}%")
-                        except Exception as e:
-                            log(f"청산 주문 실패: {e}", "ERROR")
-                            continue  # 상태 유지, 다음 루프에서 재시도
-
-                    # 손익 계산
-                    try:
-                        new_balance = get_balance_usdt(exchange)
-                    except Exception as e:
-                        log(f"청산 후 잔고 조회 실패: {e}", "ERROR")
-                        new_balance = balance
-                    pnl = new_balance - entry_balance
-                    if pnl < 0:
-                        consecutive_loss_count += 1
+                    # 패턴 진입(패턴 익절/손절 대기 중)이면 추세 반전으로 청산하지 않음
+                    if pattern_target > 0 and pattern_stop > 0:
+                        pass  # 패턴 TP/SL만 적용
                     else:
-                        consecutive_loss_count = 0
-                    log_trade(
-                        side="LONG" if is_long else "SHORT",
-                        entry_price=entry_price,
-                        exit_price=price,
-                        pnl=pnl,
-                        balance_after=new_balance,
-                        meta={
-                            "timeframe": TIMEFRAME,
-                            "symbol": SYMBOL,
-                            "regime": entry_regime,
-                            "pnl_pct": round(pnl_pct, 2),
-                            "consecutive_loss": consecutive_loss_count,
-                        },
-                    )
-                    has_position = False
-                    is_long = False
-                    entry_price = 0.0
-                    entry_regime = ""
-                    box_high_entry = 0.0
-                    box_low_entry = 0.0
-                    highest_price = 0.0
-                    lowest_price = float("inf")
-                    trailing_stop_active = False
-                    best_pnl_pct = 0.0
-                    pattern_type = ""
-                    pattern_target = 0.0
-                    pattern_stop = 0.0
-                    entry_balance = new_balance
+                        # 포지션 종료
+                        try:
+                            positions = exchange.fetch_positions([SYMBOL])
+                        except Exception as e:
+                            log(f"포지션 조회 실패: {e}", "ERROR")
+                            time.sleep(60)
+                            continue
+                        contracts = 0.0
+                        side_to_close = "long" if is_long else "short"
+                        for pos in positions:
+                            if pos.get("symbol") == SYMBOL and pos.get("side") == side_to_close:
+                                contracts = float(pos.get("contracts", 0) or 0)
+                                break
+
+                        if contracts > 0:
+                            try:
+                                if is_long:
+                                    order = exchange.create_market_sell_order(
+                                        SYMBOL, contracts, {"reduceOnly": True}
+                                    )
+                                else:
+                                    order = exchange.create_market_buy_order(
+                                        SYMBOL, contracts, {"reduceOnly": True}
+                                    )
+                                side_str = "LONG" if is_long else "SHORT"
+                                regime_kr = REGIME_KR.get(entry_regime, entry_regime)
+                                log(f"{side_str} 청산 | {regime_kr} | 진입={entry_price:.2f} 청산={price:.2f} 수익률={pnl_pct:+.2f}%")
+                            except Exception as e:
+                                log(f"청산 주문 실패: {e}", "ERROR")
+                                continue  # 상태 유지, 다음 루프에서 재시도
+
+                        # 손익 계산
+                        try:
+                            new_balance = get_balance_usdt(exchange)
+                        except Exception as e:
+                            log(f"청산 후 잔고 조회 실패: {e}", "ERROR")
+                            new_balance = balance
+                        pnl = new_balance - entry_balance
+                        if pnl < 0:
+                            consecutive_loss_count += 1
+                        else:
+                            consecutive_loss_count = 0
+                        log_trade(
+                            side="LONG" if is_long else "SHORT",
+                            entry_price=entry_price,
+                            exit_price=price,
+                            pnl=pnl,
+                            balance_after=new_balance,
+                            meta={
+                                "timeframe": TIMEFRAME,
+                                "symbol": SYMBOL,
+                                "regime": entry_regime,
+                                "pnl_pct": round(pnl_pct, 2),
+                                "consecutive_loss": consecutive_loss_count,
+                            },
+                        )
+                        has_position = False
+                        is_long = False
+                        entry_price = 0.0
+                        entry_regime = ""
+                        box_high_entry = 0.0
+                        box_low_entry = 0.0
+                        highest_price = 0.0
+                        lowest_price = float("inf")
+                        trailing_stop_active = False
+                        best_pnl_pct = 0.0
+                        pattern_type = ""
+                        pattern_target = 0.0
+                        pattern_stop = 0.0
+                        entry_balance = new_balance
 
                 elif (not has_position) and (signal == "long" or signal == "short"):
                     if daily_limit_hit or consecutive_limit_hit:
@@ -309,19 +317,35 @@ def main() -> None:
                                 mkt_price = float(ticker["last"])
                                 amount = order_usdt / mkt_price
                                 
-                                # 차트 패턴 감지 (같은 방향 시그널일 때만)
+                                # 차트 패턴 감지: 15분봉 72시간(288봉) (같은 방향 시그널일 때만)
                                 pattern_info = None
-                                if len(df) >= PATTERN_LOOKBACK:
-                                    highs = df["high"].tolist()
-                                    lows = df["low"].tolist()
-                                    closes = df["close"].tolist()
-                                    pattern_info = detect_chart_pattern(highs, lows, closes, mkt_price)
+                                if len(df) >= PATTERN_LOOKBACK * 3:
+                                    df_tmp = df.copy()
+                                    df_tmp["timestamp"] = pd.to_datetime(df_tmp["timestamp"])
+                                    df_15m = df_tmp.set_index("timestamp").resample("15min").agg(
+                                        {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+                                    ).dropna()
+                                    if len(df_15m) >= PATTERN_LOOKBACK:
+                                        highs = df_15m["high"].iloc[-PATTERN_LOOKBACK:].tolist()
+                                        lows = df_15m["low"].iloc[-PATTERN_LOOKBACK:].tolist()
+                                        closes = df_15m["close"].iloc[-PATTERN_LOOKBACK:].tolist()
+                                        pattern_info = detect_chart_pattern(highs, lows, closes, mkt_price)
                                 
                                 if signal == "long":
                                     order = exchange.create_market_buy_order(SYMBOL, amount)
                                     pt, ptg, pst = ("", 0.0, 0.0) if not (pattern_info and pattern_info.side == "LONG") else (pattern_info.name, pattern_info.target_price, pattern_info.stop_price)
                                     regime_kr = REGIME_KR.get(regime, regime)
-                                    log(f"LONG 진입 | {regime_kr} | 가격={mkt_price:.2f} 잔고={balance:.2f} 투입={order_usdt:.2f} USDT" + (f" 패턴={pt}" if pt else ""))
+                                    if pt:
+                                        entry_tp_sl = f" 패턴={pt} 목표가={ptg:.2f} 손절가={pst:.2f}"
+                                    else:
+                                        is_trend = regime == "neutral"
+                                        tp_pct = TREND_PROFIT_TARGET if is_trend else SIDEWAYS_PROFIT_TARGET
+                                        sl_pct = TREND_STOP_LOSS_PRICE if is_trend else SIDEWAYS_STOP_LOSS_PRICE
+                                        pct_per_leverage = 1.0 / LEVERAGE
+                                        tg = mkt_price * (1 + tp_pct / 100 * pct_per_leverage)
+                                        st = mkt_price * (1 - sl_pct / 100 * pct_per_leverage)
+                                        entry_tp_sl = f" 목표가={tg:.2f} 손절가={st:.2f}"
+                                    log(f"LONG 진입 | {regime_kr} | 가격={mkt_price:.2f} 잔고={balance:.2f} 투입={order_usdt:.2f} USDT{entry_tp_sl}")
                                     has_position, is_long = True, True
                                     entry_price, highest_price = mkt_price, mkt_price
                                     pattern_type, pattern_target, pattern_stop = pt, ptg, pst
@@ -329,7 +353,17 @@ def main() -> None:
                                     order = exchange.create_market_sell_order(SYMBOL, amount)
                                     pt, ptg, pst = ("", 0.0, 0.0) if not (pattern_info and pattern_info.side == "SHORT") else (pattern_info.name, pattern_info.target_price, pattern_info.stop_price)
                                     regime_kr = REGIME_KR.get(regime, regime)
-                                    log(f"SHORT 진입 | {regime_kr} | 가격={mkt_price:.2f} 잔고={balance:.2f} 투입={order_usdt:.2f} USDT" + (f" 패턴={pt}" if pt else ""))
+                                    if pt:
+                                        entry_tp_sl = f" 패턴={pt} 목표가={ptg:.2f} 손절가={pst:.2f}"
+                                    else:
+                                        is_trend = regime == "neutral"
+                                        tp_pct = TREND_PROFIT_TARGET if is_trend else SIDEWAYS_PROFIT_TARGET
+                                        sl_pct = TREND_STOP_LOSS_PRICE if is_trend else SIDEWAYS_STOP_LOSS_PRICE
+                                        pct_per_leverage = 1.0 / LEVERAGE
+                                        tg = mkt_price * (1 - tp_pct / 100 * pct_per_leverage)
+                                        st = mkt_price * (1 + sl_pct / 100 * pct_per_leverage)
+                                        entry_tp_sl = f" 목표가={tg:.2f} 손절가={st:.2f}"
+                                    log(f"SHORT 진입 | {regime_kr} | 가격={mkt_price:.2f} 잔고={balance:.2f} 투입={order_usdt:.2f} USDT{entry_tp_sl}")
                                     has_position, is_long = True, False
                                     entry_price, lowest_price = mkt_price, mkt_price
                                     pattern_type, pattern_target, pattern_stop = pt, ptg, pst
