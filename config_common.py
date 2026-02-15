@@ -43,7 +43,7 @@ SIDEWAYS_BOX_RANGE_MIN = 1  # 횡보장 상단-하단 봉간격 최소 (절대�
 SIDEWAYS_PROFIT_TARGET = 2.5
 SIDEWAYS_STOP_LOSS = 2.0
 SIDEWAYS_STOP_LOSS_PRICE = 2.0
-SIDEWAYS_BOX_EXIT_MARGIN_PCT = 1.5
+SIDEWAYS_BOX_EXIT_MARGIN_PCT = 0.5  # 박스 상·하단 돌파(이탈) 기준: 가격이 상단/하단에서 0.5% 벗어나면 이탈
 
 # 손실 한도 (paper/live에서 override 가능)
 DAILY_LOSS_LIMIT_PCT = 5.0
