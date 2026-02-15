@@ -480,26 +480,26 @@ def apply_strategy_on_candle(
             side = "LONG" if is_long else "SHORT"
             close_position(state, candle, side, f"단타청산({regime_kr})")
     else:
-        if _should_log_reason():
-            if not has_position:
-                if daily_limit_hit or consecutive_limit_hit:
-                    if daily_limit_hit:
-                        _log_daily_limit_once(current_date, daily_loss_pct, regime_kr)
-                    elif consecutive_limit_hit:
-                        log(f"[진입안함] {regime_kr} | 연속손실 {state.consecutive_loss_count}회 당일 중단")
-                else:
-                    reason = get_hold_reason(
-                        regime, rsi_use, price, short_ma, long_ma,
-                        regime_short_ma=short_ma_15m if use_15m else None,
-                        regime_long_ma=long_ma_15m if use_15m else None,
-                        regime_ma_50=ma_50_15m if use_15m else None,
-                        regime_ma_100=ma_100_15m if use_15m else None,
-                        regime_price_history=regime_price_hist,
-                        price_history=price_history,
-                    )
-                    log(f"[진입안함] {regime_kr} | {reason}")
-            elif has_position and signal == "hold":
-                log(f"[청산대기] {regime_kr} | {_reason_no_exit_strategy(regime, is_long, rsi, price, short_ma)}")
+        # 5분봉마다 진입안함/청산대기 사유 로그
+        if not has_position:
+            if daily_limit_hit or consecutive_limit_hit:
+                if daily_limit_hit:
+                    _log_daily_limit_once(current_date, daily_loss_pct, regime_kr)
+                elif consecutive_limit_hit:
+                    log(f"[진입안함] {regime_kr} | 연속손실 {state.consecutive_loss_count}회 당일 중단")
+            else:
+                reason = get_hold_reason(
+                    regime, rsi_use, price, short_ma, long_ma,
+                    regime_short_ma=short_ma_15m if use_15m else None,
+                    regime_long_ma=long_ma_15m if use_15m else None,
+                    regime_ma_50=ma_50_15m if use_15m else None,
+                    regime_ma_100=ma_100_15m if use_15m else None,
+                    regime_price_history=regime_price_hist,
+                    price_history=price_history,
+                )
+                log(f"[진입안함] {regime_kr} | {reason}")
+        elif has_position and signal == "hold":
+            log(f"[청산대기] {regime_kr} | {_reason_no_exit_strategy(regime, is_long, rsi, price, short_ma)}")
 
     if state.has_long_position:
         unrealized = (
