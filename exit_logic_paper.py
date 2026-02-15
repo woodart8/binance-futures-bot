@@ -1,4 +1,8 @@
-"""페이퍼/백테스트 전용 청산 로직. 수정 시 라이브에 영향 없음."""
+"""페이퍼/백테스트 전용 청산 로직. 수정 시 라이브에 영향 없음.
+
+박스권 이탈: 가격이 진입 시점 box_high/box_low에서 SIDEWAYS_BOX_EXIT_MARGIN_PCT(0.5%) 벗어나면
+상단 이탈(숏 청산) 또는 하단 이탈(롱 청산). 가격 기준이며 ROE 아님.
+"""
 
 from typing import Optional
 
@@ -16,8 +20,8 @@ from config_paper import (
 EXIT_REASON_DISPLAY = {
     "횡보_익절": "횡보 익절",
     "추세_익절": "추세 익절",
-    "박스권_하단이탈": "박스권 하단 이탈",
-    "박스권_상단이탈": "박스권 상단 이탈",
+    "박스권_하단이탈": "박스권 하단 이탈(0.5% 돌파)",
+    "박스권_상단이탈": "박스권 상단 이탈(0.5% 돌파)",
     "손절_횡보": "손절",
     "손절_추세": "손절",
     "스탑로스_횡보": "스탑로스",
@@ -48,7 +52,7 @@ def _check_exit(
         if price <= stop:
             return f"스탑로스{reason_suffix}"
         if not is_trend and box_high > box_low:
-            m = SIDEWAYS_BOX_EXIT_MARGIN_PCT / 100
+            m = SIDEWAYS_BOX_EXIT_MARGIN_PCT / 100  # 0.5%: 하단 대비 가격이 m 아래면 이탈
             if price < box_low * (1 - m):
                 return "박스권_하단이탈"
     else:
@@ -56,7 +60,7 @@ def _check_exit(
         if price >= stop:
             return f"스탑로스{reason_suffix}"
         if not is_trend and box_high > box_low:
-            m = SIDEWAYS_BOX_EXIT_MARGIN_PCT / 100
+            m = SIDEWAYS_BOX_EXIT_MARGIN_PCT / 100  # 0.5%: 상단 대비 가격이 m 위면 이탈
             if price > box_high * (1 + m):
                 return "박스권_상단이탈"
     if pnl_pct >= tp:

@@ -13,6 +13,7 @@ from config_paper import (
     SIDEWAYS_MIN_TOUCHES,
     SIDEWAYS_BOX_RANGE_PCT_MIN,
     SIDEWAYS_BOX_RANGE_MIN,
+    SIDEWAYS_BOX_EXIT_MARGIN_PCT,
     TREND_PULLBACK_MA_PCT,
     TREND_RSI_LONG_MAX,
     TREND_RSI_SHORT_MIN,
@@ -44,6 +45,9 @@ def detect_market_regime(
         box_low = min(price_history[-period:])
         box_range = box_high - box_low
         if box_range > 0:
+            m = SIDEWAYS_BOX_EXIT_MARGIN_PCT / 100
+            if price > box_high * (1 + m) or price < box_low * (1 - m):
+                return "neutral"  # 박스권 이탈 구간: 가격이 다시 박스 안으로 들어올 때까지 추세장
             pct = box_range / box_low * 100
             if pct >= SIDEWAYS_BOX_RANGE_PCT_MIN and box_range >= SIDEWAYS_BOX_RANGE_MIN and box_low <= price <= box_high:
                 recent = price_history[-period:]
