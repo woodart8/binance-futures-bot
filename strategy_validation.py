@@ -1,5 +1,13 @@
 """전략 검증."""
 
+import sys
+import config_paper
+sys.modules["config"] = config_paper
+import exit_logic_paper
+sys.modules["exit_logic"] = exit_logic_paper
+import strategy_core_paper
+sys.modules["strategy_core"] = strategy_core_paper
+
 from backtest import run_backtest, print_backtest_result
 from exchange_client import get_public_exchange
 from data import fetch_ohlcv_history

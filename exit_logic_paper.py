@@ -1,8 +1,8 @@
-"""횡보/추세장 TP/SL 청산."""
+"""페이퍼/백테스트 전용 청산 로직. 수정 시 라이브에 영향 없음."""
 
 from typing import Optional
 
-from config import (
+from config_paper import (
     SIDEWAYS_STOP_LOSS,
     SIDEWAYS_PROFIT_TARGET,
     SIDEWAYS_STOP_LOSS_PRICE,

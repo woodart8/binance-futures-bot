@@ -1,8 +1,8 @@
-"""횡보장 박스: MA7>MA20 하단 롱 / MA7<MA20 상단 숏."""
+"""페이퍼/백테스트 전용 전략 로직. 수정 시 라이브에 영향 없음."""
 
 from typing import Literal, Optional, List
 
-from config import (
+from config_paper import (
     MA_SHORT_PERIOD,
     MA_LONG_PERIOD,
     REGIME_LOOKBACK_15M,
@@ -22,7 +22,7 @@ Signal = Literal["long", "short", "flat", "hold"]
 MarketRegime = Literal["sideways", "neutral"]
 
 REGIME_KR = {"sideways": "횡보장", "neutral": "추세장"}
-BOX_TOUCH_THRESHOLD = 0.012  # 1.2% 이내 = 터치
+BOX_TOUCH_THRESHOLD = 0.012
 
 
 def detect_market_regime(
@@ -34,7 +34,6 @@ def detect_market_regime(
     price_history: Optional[List[float]] = None,
     box_period: Optional[int] = None,
 ) -> MarketRegime:
-    """박스 조건 충족→sideways, 미충족→neutral(거래 쉼)."""
     if long_ma <= 0 or ma_50 <= 0 or ma_100 <= 0:
         return "neutral"
 
@@ -58,7 +57,6 @@ def detect_market_regime(
 def _validate_sideways_box(
     price_history: Optional[List[float]], price: float, period: Optional[int] = None
 ) -> Optional[tuple]:
-    """박스 검증. 반환: (box_high, box_low, box_range, price_position)."""
     p = period or SIDEWAYS_BOX_PERIOD
     if not price_history or len(price_history) < p:
         return None
@@ -113,7 +111,6 @@ def swing_strategy_signal(
     macd_line: Optional[float] = None,
     macd_signal: Optional[float] = None,
 ) -> Signal:
-    """neutral=추세 추종 단타(상승추세 롱 풀백, 하락추세 숏 풀백). sideways=박스 하단 롱 / 상단 숏."""
     if regime == "neutral":
         ma_short = regime_short_ma if regime_short_ma is not None else short_ma
         ma_long = regime_long_ma if regime_long_ma is not None else long_ma
@@ -188,7 +185,6 @@ def get_hold_reason(
     regime_price_history: Optional[List[float]] = None,
     price_history: Optional[List[float]] = None,
 ) -> str:
-    """진입하지 않은 이유(hold)를 구체적으로 반환. 로그용."""
     if regime == "neutral":
         ma_short = regime_short_ma if regime_short_ma is not None else short_ma
         ma_long = regime_long_ma if regime_long_ma is not None else long_ma
@@ -258,7 +254,6 @@ def get_entry_reason(
     regime_price_history: Optional[List[float]] = None,
     price_history: Optional[List[float]] = None,
 ) -> str:
-    """진입 이유를 구체적으로 반환. 로그용. side는 'LONG' 또는 'SHORT'."""
     if regime == "neutral":
         ma_short = regime_short_ma if regime_short_ma is not None else short_ma
         if side == "LONG":

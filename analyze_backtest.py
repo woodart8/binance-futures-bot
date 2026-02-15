@@ -1,5 +1,13 @@
 """백테스트 장별 분석."""
 
+import sys
+import config_paper
+sys.modules["config"] = config_paper
+import exit_logic_paper
+sys.modules["exit_logic"] = exit_logic_paper
+import strategy_core_paper
+sys.modules["strategy_core"] = strategy_core_paper
+
 from typing import Optional
 import pandas as pd
 
