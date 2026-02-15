@@ -77,11 +77,29 @@
 
 ---
 
-## 6. 주요 파일
+## 6. 펀딩비 (Funding Rate)
+
+바이낸스 USDT-M 선물은 **00:00, 08:00, 16:00 UTC**에 8시간마다 펀딩이 정산됩니다.  
+총 손익 = **매매 손익 + 펀딩 손익**으로 반영합니다.
+
+| 모드 | 처리 방식 |
+|------|-----------|
+| **페이퍼** | 00/08/16 UTC에 포지션 보유 시 `funding.py`로 레이트 조회 후 잔고에 펀딩 손익 반영. `funding_log.csv`에 기록. |
+| **백테스트** | `run_backtest(df, exchange=get_public_exchange())`로 실행 시 구간 펀딩 히스토리 조회 후 00/08/16 봉에서 잔고 반영. `exchange` 생략 시 펀딩 0. 결과에 `total_funding_pnl` 포함. |
+| **라이브** | 거래소가 자동 정산하므로 **별도 계산 없음**. `fetch_balance()` 잔고에 이미 펀딩이 포함됨. |
+
+- **funding.py**: 펀딩 레이트 조회(`fetch_current_funding_rate`, `fetch_funding_history`), 정산 구간 키·손익 계산.
+- **paper_balance.json**: `balance`, `last_funding_utc_key`(마지막 펀딩 적용 구간) 저장.
+
+---
+
+## 7. 주요 파일
 
 - **strategy_core.py** — 장세 판별, 진입 신호, 진입/보유 사유 문자열  
 - **exit_logic.py** — 목표익절·손절·스탑로스·박스 이탈(상·하단 0.5% 돌파) 청산  
 - **chart_patterns.py** — 차트 패턴·하모닉 패턴 감지 및 목표가/손절가  
+- **funding.py** — 펀딩 레이트 조회, 00/08/16 UTC 정산·손익 계산  
 - **config.py** — 상수 설정  
-- **backtest.py** / **analyze_backtest.py** — 백테스트 및 장별·패턴별 분석  
+- **backtest.py** / **analyze_backtest.py** — 백테스트 및 장별·패턴별 분석 (펀딩 옵션: `exchange` 인자)  
+- **trade_logger.py** — 매매 기록 `trades_log.csv`, 펀딩 기록 `funding_log.csv`  
 - **daily_report.py** — 전날 매매 결과 HTML 리포트 및 이메일 전송  

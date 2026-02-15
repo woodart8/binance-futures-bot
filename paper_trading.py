@@ -9,6 +9,7 @@ import strategy_core_paper
 sys.modules["strategy_core"] = strategy_core_paper
 
 import time
+from datetime import datetime, timezone
 import pandas as pd
 
 from config import (
@@ -38,6 +39,7 @@ from trading_logic_paper import (
     check_scalp_stop_loss_and_profit,
     apply_strategy_on_candle,
     try_paper_entry,
+    apply_funding_if_needed,
 )
 
 CHECK_INTERVAL = 10
@@ -79,6 +81,12 @@ def main() -> None:
                 log(f"현재가 조회 실패: {e}", "ERROR")
                 current_price = price
 
+            # 30초 단위: 포지션 보유 시 00/08/16 UTC 펀딩비 적용
+            if state.has_long_position or state.has_short_position:
+                now_utc = datetime.now(timezone.utc)
+                if apply_funding_if_needed(state, exchange, now_utc, current_price):
+                    time.sleep(CHECK_INTERVAL)
+                    continue
             # 30초 단위: 포지션 보유 시 현재가로 익절/손절 체크 (모의 청산)
             if state.has_long_position or state.has_short_position:
                 candle_for_close = pd.Series({**latest.to_dict(), "close": current_price})
@@ -97,7 +105,7 @@ def main() -> None:
                     "LONG" if state.has_long_position
                     else ("SHORT" if state.has_short_position else "NONE")
                 )
-                total_pnl = state.equity - INITIAL_BALANCE
+                total_pnl = state.equity - INITIAL_BALANCE  # 매매+펀딩 포함
                 log(f"시작 포지션={pos_status} 가격={current_price:.2f} 잔고={state.balance:.2f} PNL={total_pnl:+.2f}")
             elif latest_time > last_candle_time:
                 did_close = apply_strategy_on_candle(state, latest, df)
@@ -111,7 +119,7 @@ def main() -> None:
                     "LONG" if state.has_long_position
                     else ("SHORT" if state.has_short_position else "NONE")
                 )
-                total_pnl = state.equity - INITIAL_BALANCE
+                total_pnl = state.equity - INITIAL_BALANCE  # 매매+펀딩 포함
                 unrealized_pnl_pct = 0.0
                 if state.has_long_position:
                     unrealized_pnl_pct = (price - state.entry_price) / state.entry_price * LEVERAGE * 100
@@ -128,7 +136,7 @@ def main() -> None:
             time.sleep(CHECK_INTERVAL)
 
     except KeyboardInterrupt:
-        total_pnl = state.equity - INITIAL_BALANCE
+        total_pnl = state.equity - INITIAL_BALANCE  # 매매+펀딩 포함
         log(f"종료 잔고={state.balance:.2f} PNL={total_pnl:+.2f}")
     except Exception as e:
         log(f"오류: {e}", "ERROR")

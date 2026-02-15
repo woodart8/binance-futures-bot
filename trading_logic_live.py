@@ -28,6 +28,7 @@ from logger import log
 
 
 def get_balance_usdt(exchange) -> float:
+    """거래소 USDT 잔고(사용가능) 반환. 00/08/16 UTC 펀딩은 거래소가 자동 정산하므로 이미 반영됨."""
     balance = exchange.fetch_balance()
     usdt_info = balance.get("USDT", {})
     free = float(usdt_info.get("free", 0) or 0)

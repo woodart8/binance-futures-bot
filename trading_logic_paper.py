@@ -30,8 +30,14 @@ from data import compute_regime_15m
 from chart_patterns import detect_chart_pattern, PATTERN_LOOKBACK
 from strategy_core import REGIME_KR, swing_strategy_signal, get_hold_reason, get_entry_reason, get_sideways_box_bounds
 from exit_logic import check_long_exit, check_short_exit, reason_to_display_message
-from trade_logger import log_trade
+from trade_logger import log_trade, log_funding
 from logger import log
+from funding import (
+    fetch_current_funding_rate,
+    get_funding_utc_key,
+    compute_funding_pnl,
+    FUNDING_HOURS_UTC,
+)
 
 RISK_PER_TRADE = POSITION_SIZE_PERCENT
 REASON_LOG_INTERVAL = 300
@@ -44,32 +50,81 @@ def _paper_balance_path() -> str:
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), fname)
 
 
-def load_paper_balance() -> float:
-    """저장된 모의투자 잔고를 읽는다. 없거나 유효하지 않으면 INITIAL_BALANCE 반환."""
+def load_paper_balance() -> tuple:
+    """저장된 모의투자 잔고를 읽는다. (balance, last_funding_utc_key). 없거나 유효하지 않으면 (INITIAL_BALANCE, "")."""
     path = _paper_balance_path()
     if not os.path.isfile(path):
-        return INITIAL_BALANCE
+        return (INITIAL_BALANCE, "")
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         balance = float(data.get("balance", 0))
         if balance <= 0:
-            return INITIAL_BALANCE
-        return balance
+            return (INITIAL_BALANCE, "")
+        last_funding = str(data.get("last_funding_utc_key", ""))
+        return (balance, last_funding)
     except (json.JSONDecodeError, OSError, TypeError, ValueError):
-        return INITIAL_BALANCE
+        return (INITIAL_BALANCE, "")
 
 
-def save_paper_balance(balance: float) -> None:
-    """모의투자 잔고를 파일에 저장(수익/손실 청산 시 호출)."""
+def save_paper_balance(balance: float, last_funding_utc_key: str = "") -> None:
+    """모의투자 잔고 및 마지막 펀딩 적용 구간을 파일에 저장."""
     path = _paper_balance_path()
     try:
         from datetime import datetime
-        data = {"balance": round(balance, 2), "updated_at": datetime.utcnow().isoformat() + "Z"}
+        data = {
+            "balance": round(balance, 2),
+            "updated_at": datetime.utcnow().isoformat() + "Z",
+            "last_funding_utc_key": last_funding_utc_key,
+        }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except OSError as e:
         log(f"잔고 저장 실패: {path} - {e}", "ERROR")
+
+
+def apply_funding_if_needed(
+    state: PaperState,
+    exchange,
+    current_utc_datetime: "datetime",
+    current_price: float,
+) -> bool:
+    """
+    00/08/16 UTC 펀딩 정산 시각이면 펀딩비를 적용하고 잔고를 갱신.
+    포지션 보유 시에만 적용하며, 같은 정산 구간에는 한 번만 적용.
+    :return: 펀딩을 적용했으면 True.
+    """
+    from datetime import datetime, timezone
+
+    if not (state.has_long_position or state.has_short_position):
+        return False
+    key = get_funding_utc_key(current_utc_datetime)
+    if key is None or (state.last_funding_utc_key and key <= state.last_funding_utc_key):
+        return False
+    try:
+        rate = fetch_current_funding_rate(exchange, SYMBOL)
+    except Exception as e:
+        log(f"펀딩 레이트 조회 실패: {e}", "ERROR")
+        return False
+    position_value = state.position_size * current_price
+    is_long = state.has_long_position
+    side = "LONG" if is_long else "SHORT"
+    funding_pnl = compute_funding_pnl(position_value, rate, is_long)
+    state.balance += funding_pnl
+    state.last_funding_utc_key = key
+    log_funding(
+        funding_utc_key=key,
+        side=side,
+        position_value=position_value,
+        funding_rate=rate,
+        funding_pnl=funding_pnl,
+        balance_after=state.balance,
+        meta={"symbol": SYMBOL, "mode": "paper"},
+    )
+    rate_pct = rate * 100
+    log(f"펀딩비 적용 | {key} UTC | {side} | 레이트={rate_pct:.4f}% 명목={position_value:.2f} USDT | 펀딩손익={funding_pnl:+.2f} 잔고={state.balance:.2f}")
+    save_paper_balance(state.balance, state.last_funding_utc_key)
+    return True
 
 
 def _log_daily_limit_once(current_date: str, daily_loss_pct: float, regime_kr: str = "") -> None:
@@ -112,10 +167,11 @@ class PaperState:
     daily_start_balance: float
     daily_start_date: str
     consecutive_loss_count: int
+    last_funding_utc_key: str  # "YYYY-MM-DD-HH" 적용한 마지막 펀딩 시각
 
 
 def init_state() -> PaperState:
-    balance = load_paper_balance()
+    balance, last_funding_utc_key = load_paper_balance()
     return PaperState(
         balance=balance,
         equity=balance,
@@ -139,6 +195,7 @@ def init_state() -> PaperState:
         daily_start_balance=balance,
         daily_start_date="",
         consecutive_loss_count=0,
+        last_funding_utc_key=last_funding_utc_key,
     )
 
 
@@ -196,7 +253,7 @@ def close_position(state: PaperState, candle: pd.Series, side: str, reason: str)
     )
     kr = REGIME_KR.get(entry_regime, entry_regime or "?")
     log(f"{side} 청산 | {kr} | {reason} | 진입={entry_price:.2f} 청산={price:.2f} 수익률={pnl_pct*100:+.2f}% 손익={net_pnl:+.2f} 잔고={state.balance:.2f}")
-    save_paper_balance(state.balance)
+    save_paper_balance(state.balance, state.last_funding_utc_key)
 
 
 def open_position(

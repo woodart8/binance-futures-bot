@@ -29,11 +29,17 @@ from config import (
     DAILY_LOSS_LIMIT_PCT,
     SIDEWAYS_BOX_PERIOD,
     REGIME_LOOKBACK_15M,
+    SYMBOL,
 )
 from indicators import calculate_rsi, calculate_ma, calculate_macd
 from exit_logic import check_long_exit, check_short_exit, reason_to_display_message
 from strategy_core import swing_strategy_signal, detect_market_regime, get_sideways_box_bounds
 from chart_patterns import detect_chart_pattern, ChartPattern, PATTERN_LOOKBACK
+from funding import (
+    FUNDING_HOURS_UTC,
+    fetch_funding_history,
+    compute_funding_pnl,
+)
 
 
 @dataclass
@@ -57,6 +63,7 @@ class BacktestResult:
     final_balance: float
     total_pnl: float
     total_pnl_pct: float
+    total_funding_pnl: float  # 펀딩비 누적 손익
     num_trades: int
     num_wins: int
     num_losses: int
@@ -118,12 +125,13 @@ def _close_position(
     return net_pnl, is_win
 
 
-def run_backtest(df: pd.DataFrame) -> BacktestResult:
+def run_backtest(df: pd.DataFrame, exchange=None) -> BacktestResult:
     """
     백테스트 실행.
-    
-    :param df: OHLCV 데이터프레임 (timestamp, open, high, low, close, volume)
-    :return: 백테스트 결과
+
+    :param df: OHLCV 데이터프레임 (timestamp, open, high, low, close, volume). timestamp는 UTC 가정.
+    :param exchange: ccxt 거래소 인스턴스. 주어지면 해당 구간 펀딩 히스토리를 조회해 펀딩비 반영.
+    :return: 백테스트 결과 (total_pnl에 매매손익+펀딩손익 포함)
     """
     # 지표 계산 (5분봉)
     df = df.copy()
@@ -140,6 +148,27 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
     df["volume_ma"] = df["volume"].rolling(window=20).mean()
     
     df = df.dropna().reset_index(drop=True)
+
+    # 펀딩 레이트 히스토리 (exchange 있으면 조회, 없으면 펀딩 0으로 적용)
+    funding_rates_by_key: dict = {}
+    if exchange is not None and len(df) > 0:
+        ts_min = pd.to_datetime(df["timestamp"].min())
+        ts_max = pd.to_datetime(df["timestamp"].max())
+        if getattr(ts_min, "tzinfo", None) is None:
+            ts_min = ts_min.tz_localize("UTC")
+        if getattr(ts_max, "tzinfo", None) is None:
+            ts_max = ts_max.tz_localize("UTC")
+        start_ms = int(ts_min.timestamp() * 1000)
+        end_ms = int(ts_max.timestamp() * 1000)
+        try:
+            history = fetch_funding_history(exchange, SYMBOL, start_ms, end_ms)
+            for ts_ms, rate in history:
+                t = pd.Timestamp(ts_ms, unit="ms", tz="UTC")
+                if t.hour in FUNDING_HOURS_UTC:
+                    key = f"{t.year:04d}-{t.month:02d}-{t.day:02d}-{t.hour:02d}"
+                    funding_rates_by_key[key] = rate
+        except Exception:
+            pass
 
     # 15분봉 리샘플 (장세 판별용 24시간)
     df_tmp = df.copy()
@@ -198,6 +227,10 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
     
     # 포지션 크기
     current_position_size = POSITION_SIZE_PERCENT
+
+    # 펀딩비: 00/08/16 UTC 적용 구간 추적
+    applied_funding_keys: set = set()
+    total_funding_pnl = 0.0
     
     total_rows = len(df)
     last_progress = -1
@@ -212,6 +245,21 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
         volume = float(row["volume"])
         avg_volume = float(row.get("volume_ma", volume))
         rsi = float(row["rsi"])
+        row_ts = row.get("timestamp")
+        if row_ts is not None and has_position:
+            row_ts = pd.Timestamp(row_ts)
+            if getattr(row_ts, "tzinfo", None) is None and hasattr(row_ts, "tz_localize"):
+                row_ts = row_ts.tz_localize("UTC")
+            hour = getattr(row_ts, "hour", None)
+            if hour is not None and hour in FUNDING_HOURS_UTC:
+                key = f"{row_ts.year:04d}-{row_ts.month:02d}-{row_ts.day:02d}-{row_ts.hour:02d}"
+                if key not in applied_funding_keys:
+                    rate = funding_rates_by_key.get(key, 0.0)
+                    position_value = balance * current_position_size * LEVERAGE
+                    funding_pnl = compute_funding_pnl(position_value, rate, is_long)
+                    balance += funding_pnl
+                    total_funding_pnl += funding_pnl
+                    applied_funding_keys.add(key)
         short_ma = float(row["ma_short"])
         long_ma = float(row["ma_long"])
         ma_50 = float(row.get("ma_50", 0.0))
@@ -688,6 +736,7 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
         final_balance=balance,
         total_pnl=total_pnl,
         total_pnl_pct=total_pnl_pct,
+        total_funding_pnl=total_funding_pnl,
         num_trades=num_trades,
         num_wins=num_wins,
         num_losses=num_losses,
@@ -704,4 +753,5 @@ def run_backtest(df: pd.DataFrame) -> BacktestResult:
 
 def print_backtest_result(result: BacktestResult) -> None:
     """백테스트 결과 출력."""
-    print(f"{result.total_pnl:+.2f} USDT ({result.total_pnl_pct:+.2f}%), 거래: {result.num_trades}회, 승률: {result.win_rate:.2f}%")
+    funding_str = f", 펀딩={result.total_funding_pnl:+.2f}" if result.total_funding_pnl != 0 else ""
+    print(f"{result.total_pnl:+.2f} USDT ({result.total_pnl_pct:+.2f}%){funding_str}, 거래: {result.num_trades}회, 승률: {result.win_rate:.2f}%")

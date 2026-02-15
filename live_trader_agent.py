@@ -108,7 +108,7 @@ def main() -> None:
             if state["last_candle_time"] is None:
                 state["last_candle_time"] = latest_time
                 try:
-                    bal = get_balance_usdt(exchange)
+                    bal = get_balance_usdt(exchange)  # 거래소 잔고(펀딩 포함)
                 except Exception:
                     bal = 0.0
                 log(f"[시작] 가격={price:.2f} 잔고={bal:.2f}")
