@@ -233,11 +233,11 @@ def get_hold_reason(
     ma_long = regime_long_ma if regime_long_ma is not None else long_ma
     if ma_short > ma_long:
         if pos_pct > bottom:
-            return f"횡보장 롱: 가격이 박스 하단 근처 아님 (박스 내 위치 {pos_pct:.1f}%, 하단 기준 {bottom:.0f}% 이하여야 함)"
+            return "횡보장 롱: 가격이 박스 하단 근처 아님"
         return "횡보장 롱: MA 정배열 but 하단 조건 미충족"
     if ma_short < ma_long:
         if pos_pct < top:
-            return f"횡보장 숏: 가격이 박스 상단 근처 아님 (박스 내 위치 {pos_pct:.1f}%, 상단 기준 {top:.0f}% 이상이어야 함)"
+            return "횡보장 숏: 가격이 박스 상단 근처 아님"
         return "횡보장 숏: MA 역배열 but 상단 조건 미충족"
     return "횡보장: MA7·MA20 크로스 구간(명확한 정/역배열 아님)"
 
@@ -277,5 +277,5 @@ def get_entry_reason(
     ma_short = regime_short_ma if regime_short_ma is not None else short_ma
     ma_long = regime_long_ma if regime_long_ma is not None else long_ma
     if side == "LONG":
-        return f"박스 하단 근처(위치 {pos_pct:.1f}%) + MA 정배열(MA7 > MA20)"
-    return f"박스 상단 근처(위치 {pos_pct:.1f}%) + MA 역배열(MA7 < MA20)"
+        return "박스 하단 근처 + MA 정배열(MA7 > MA20)"
+    return "박스 상단 근처 + MA 역배열(MA7 < MA20)"
