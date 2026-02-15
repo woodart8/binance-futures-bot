@@ -172,3 +172,110 @@ def swing_strategy_signal(
                     return "flat"
 
     return "hold"
+
+
+def get_hold_reason(
+    regime: MarketRegime,
+    rsi_value: float,
+    price: float,
+    short_ma: float,
+    long_ma: float,
+    *,
+    regime_short_ma: Optional[float] = None,
+    regime_long_ma: Optional[float] = None,
+    regime_ma_50: Optional[float] = None,
+    regime_ma_100: Optional[float] = None,
+    regime_price_history: Optional[List[float]] = None,
+    price_history: Optional[List[float]] = None,
+) -> str:
+    """진입하지 않은 이유(hold)를 구체적으로 반환. 로그용."""
+    if regime == "neutral":
+        ma_short = regime_short_ma if regime_short_ma is not None else short_ma
+        ma_long = regime_long_ma if regime_long_ma is not None else long_ma
+        ma_50 = regime_ma_50
+        ma_100 = regime_ma_100
+        if ma_short is None or ma_long is None or ma_long <= 0:
+            return "15분봉 MA 데이터 부족"
+        uptrend = ma_short > ma_long
+        if TREND_MA50_MA100_FILTER and ma_50 is not None and ma_100 is not None:
+            uptrend = uptrend and ma_50 > ma_100
+            downtrend = ma_short < ma_long and ma_50 < ma_100
+        else:
+            downtrend = ma_short < ma_long
+        pullback_pct = TREND_PULLBACK_MA_PCT / 100
+        if uptrend:
+            if price > ma_short * (1 + pullback_pct):
+                return f"상승추세 but 가격이 MA7 풀백 구간 아님 (가격 {price:.2f} > MA7×1.01)"
+            if rsi_value > TREND_RSI_LONG_MAX:
+                return f"상승추세 but RSI 과매수 (RSI {rsi_value:.0f} > {TREND_RSI_LONG_MAX})"
+            return "상승추세 but 풀백·RSI 조건 미충족"
+        if downtrend:
+            if price < ma_short * (1 - pullback_pct):
+                return f"하락추세 but 가격이 MA7 풀백 구간 아님 (가격 {price:.2f} < MA7×0.99)"
+            if rsi_value < TREND_RSI_SHORT_MIN:
+                return f"하락추세 but RSI 과매도 (RSI {rsi_value:.0f} < {TREND_RSI_SHORT_MIN})"
+            return "하락추세 but 풀백·RSI 조건 미충족"
+        return "상승·하락 추세 아님 (MA7/MA20 또는 MA50/MA100 조건 미충족)"
+
+    ph = regime_price_history if regime_price_history else price_history
+    if not ph or len(ph) < (REGIME_LOOKBACK_15M if regime_price_history else SIDEWAYS_BOX_PERIOD):
+        return "박스 계산용 가격 데이터 부족"
+    box = _validate_sideways_box(ph, price, period=REGIME_LOOKBACK_15M if regime_price_history else SIDEWAYS_BOX_PERIOD)
+    if not box:
+        return "박스권 아님 또는 상·하단 터치 부족(2회 미만)"
+    _, box_low, box_range, pos = box
+    if box_range <= 0:
+        return "박스권 범위 없음"
+    pos_pct = pos * 100
+    top = (1.0 - SIDEWAYS_BOX_TOP_MARGIN) * 100
+    bottom = SIDEWAYS_BOX_BOTTOM_MARGIN * 100
+    ma_short = regime_short_ma if regime_short_ma is not None else short_ma
+    ma_long = regime_long_ma if regime_long_ma is not None else long_ma
+    if ma_short > ma_long:
+        if pos_pct > bottom:
+            return f"횡보장 롱: 가격이 박스 하단 근처 아님 (박스 내 위치 {pos_pct:.1f}%, 하단 기준 {bottom:.0f}% 이하여야 함)"
+        return "횡보장 롱: MA 정배열 but 하단 조건 미충족"
+    if ma_short < ma_long:
+        if pos_pct < top:
+            return f"횡보장 숏: 가격이 박스 상단 근처 아님 (박스 내 위치 {pos_pct:.1f}%, 상단 기준 {top:.0f}% 이상이어야 함)"
+        return "횡보장 숏: MA 역배열 but 상단 조건 미충족"
+    return "횡보장: MA7·MA20 크로스 구간(명확한 정/역배열 아님)"
+
+
+def get_entry_reason(
+    regime: MarketRegime,
+    side: str,
+    rsi_value: float,
+    price: float,
+    short_ma: float,
+    long_ma: float,
+    *,
+    regime_short_ma: Optional[float] = None,
+    regime_long_ma: Optional[float] = None,
+    regime_ma_50: Optional[float] = None,
+    regime_ma_100: Optional[float] = None,
+    regime_price_history: Optional[List[float]] = None,
+    price_history: Optional[List[float]] = None,
+) -> str:
+    """진입 이유를 구체적으로 반환. 로그용. side는 'LONG' 또는 'SHORT'."""
+    if regime == "neutral":
+        ma_short = regime_short_ma if regime_short_ma is not None else short_ma
+        if side == "LONG":
+            return f"상승추세 + MA7 풀백(가격 {price:.2f} ≤ MA7×1.01) + RSI {rsi_value:.0f}(≤{TREND_RSI_LONG_MAX})"
+        return f"하락추세 + MA7 풀백(가격 {price:.2f} ≥ MA7×0.99) + RSI {rsi_value:.0f}(≥{TREND_RSI_SHORT_MIN})"
+
+    ph = regime_price_history if regime_price_history else price_history
+    if not ph:
+        return f"횡보장 {side} (박스)"
+    box = _validate_sideways_box(ph, price, period=REGIME_LOOKBACK_15M if regime_price_history else SIDEWAYS_BOX_PERIOD)
+    if not box:
+        return f"횡보장 {side} (박스)"
+    _, box_low, box_range, pos = box
+    if box_range <= 0:
+        return f"횡보장 {side} (박스)"
+    pos_pct = pos * 100
+    ma_short = regime_short_ma if regime_short_ma is not None else short_ma
+    ma_long = regime_long_ma if regime_long_ma is not None else long_ma
+    if side == "LONG":
+        return f"박스 하단 근처(위치 {pos_pct:.1f}%) + MA 정배열(MA7 > MA20)"
+    return f"박스 상단 근처(위치 {pos_pct:.1f}%) + MA 역배열(MA7 < MA20)"

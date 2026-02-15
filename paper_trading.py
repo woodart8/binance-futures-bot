@@ -31,7 +31,7 @@ from exchange_client import get_public_exchange
 from data import fetch_ohlcv, compute_regime_15m
 from indicators import calculate_rsi, calculate_ma, calculate_macd
 from chart_patterns import detect_chart_pattern, PATTERN_LOOKBACK
-from strategy_core import REGIME_KR, swing_strategy_signal
+from strategy_core import REGIME_KR, swing_strategy_signal, get_hold_reason, get_entry_reason
 from exit_logic import check_long_exit, check_short_exit, reason_to_display_message
 from trade_logger import log_trade
 from logger import log
@@ -229,10 +229,6 @@ def open_position(
     log(f"{side} 진입 | {kr} | {reason} | 가격={price:.2f} 잔고={state.balance:.2f} 투입={trade_capital:.2f}")
 
 
-def _reason_no_entry(regime: str, signal: str, rsi: float, price: float, short_ma: float, long_ma: float) -> str:
-    return f"시그널={signal} (횡보: 박스 4% / 추세: 15분봉 MA 추세추종) 진입 조건 미충족"
-
-
 def _reason_no_exit_strategy(regime: str, is_long: bool, rsi: float, price: float, short_ma: float) -> str:
     return "청산 조건 미충족"
 
@@ -408,8 +404,17 @@ def apply_strategy_on_candle(
                 reason_suffix = f" + 패턴익절/손절 ({pt})"
             else:
                 reason_suffix = ""
+            entry_reason = get_entry_reason(
+                regime, "LONG", rsi_use, price, short_ma, long_ma,
+                regime_short_ma=short_ma_15m if use_15m else None,
+                regime_long_ma=long_ma_15m if use_15m else None,
+                regime_ma_50=ma_50_15m if use_15m else None,
+                regime_ma_100=ma_100_15m if use_15m else None,
+                regime_price_history=regime_price_hist,
+                price_history=price_history,
+            ) + reason_suffix
             open_position(
-                state, price, "LONG", f"단타 전략 ({regime_kr}){reason_suffix}".strip(),
+                state, price, "LONG", entry_reason.strip(),
                 regime, price_history, price_history_15m=price_history_15m if regime == "sideways" else None,
                 pattern_type=pt, pattern_target=ptg, pattern_stop=pst,
             )
@@ -426,8 +431,17 @@ def apply_strategy_on_candle(
                 reason_suffix = f" + 패턴익절/손절 ({pt})"
             else:
                 reason_suffix = ""
+            entry_reason = get_entry_reason(
+                regime, "SHORT", rsi_use, price, short_ma, long_ma,
+                regime_short_ma=short_ma_15m if use_15m else None,
+                regime_long_ma=long_ma_15m if use_15m else None,
+                regime_ma_50=ma_50_15m if use_15m else None,
+                regime_ma_100=ma_100_15m if use_15m else None,
+                regime_price_history=regime_price_hist,
+                price_history=price_history,
+            ) + reason_suffix
             open_position(
-                state, price, "SHORT", f"단타 전략 ({regime_kr}){reason_suffix}".strip(),
+                state, price, "SHORT", entry_reason.strip(),
                 regime, price_history, price_history_15m=price_history_15m if regime == "sideways" else None,
                 pattern_type=pt, pattern_target=ptg, pattern_stop=pst,
             )
@@ -443,7 +457,16 @@ def apply_strategy_on_candle(
                     elif consecutive_limit_hit:
                         log(f"[진입안함] {regime_kr} | 연속손실 {state.consecutive_loss_count}회 당일 중단")
                 else:
-                    log(f"[진입안함] {regime_kr} | {_reason_no_entry(regime, signal, rsi, price, short_ma, long_ma)}")
+                    reason = get_hold_reason(
+                        regime, rsi_use, price, short_ma, long_ma,
+                        regime_short_ma=short_ma_15m if use_15m else None,
+                        regime_long_ma=long_ma_15m if use_15m else None,
+                        regime_ma_50=ma_50_15m if use_15m else None,
+                        regime_ma_100=ma_100_15m if use_15m else None,
+                        regime_price_history=regime_price_hist,
+                        price_history=price_history,
+                    )
+                    log(f"[진입안함] {regime_kr} | {reason}")
             elif has_position and signal == "hold":
                 log(f"[청산대기] {regime_kr} | {_reason_no_exit_strategy(regime, is_long, rsi, price, short_ma)}")
 
@@ -535,27 +558,28 @@ def main() -> None:
             elif latest_time > last_candle_time:
                 price = float(latest["close"])
                 rsi = float(latest["rsi"])
-                
+                had_position_before = state.has_long_position or state.has_short_position
+
                 apply_strategy_on_candle(state, latest, df)
                 last_candle_time = latest_time
-                
+                just_entered = not had_position_before and (state.has_long_position or state.has_short_position)
+
                 pos_status = (
                     "LONG" if state.has_long_position
                     else ("SHORT" if state.has_short_position else "NONE")
                 )
-                
                 total_pnl = state.equity - INITIAL_BALANCE
                 roe = (total_pnl / INITIAL_BALANCE * 100) if INITIAL_BALANCE > 0 else 0.0
-                
                 unrealized_pnl_pct = 0.0
                 if state.has_long_position:
                     unrealized_pnl_pct = (price - state.entry_price) / state.entry_price * LEVERAGE * 100
                 elif state.has_short_position:
                     unrealized_pnl_pct = (state.entry_price - price) / state.entry_price * LEVERAGE * 100
-                
                 extra = f" 미실현={unrealized_pnl_pct:+.2f}%" if unrealized_pnl_pct != 0 else ""
                 regime_str = f" | {REGIME_KR.get(state.entry_regime, state.entry_regime)}" if (state.has_long_position or state.has_short_position) and state.entry_regime else ""
-                log(f"[5m] {pos_status}{regime_str} 가격={price:.2f} RSI={rsi:.0f} 잔고={state.balance:.2f} PNL={total_pnl:+.2f}{extra}")
+                # 진입한 봉에서는 진입 로그만 1번 남기고 [5m] 상태 로그는 생략
+                if not just_entered:
+                    log(f"[5m] {pos_status}{regime_str} 가격={price:.2f} RSI={rsi:.0f} 잔고={state.balance:.2f} PNL={total_pnl:+.2f}{extra}")
 
             time.sleep(CHECK_INTERVAL)
 
