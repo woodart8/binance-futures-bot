@@ -17,7 +17,7 @@ from data import fetch_ohlcv_history
 from strategy_core import REGIME_KR
 
 REGIME_STRATEGY = {
-    "sideways": "박스 하단 롱 / 상단 숏 (MA7>MA20 하단, MA7<MA20 상단)",
+    "sideways": "박스 하단 4% 롱 / 상단 4% 숏 (저점·고점 근처 진입, MA 조건 없음)",
     "neutral": "추세 추종 단타 (상승추세 MA 풀백 롱 / 하락추세 MA 풀백 숏, 15분봉 MA·RSI)",
 }
 

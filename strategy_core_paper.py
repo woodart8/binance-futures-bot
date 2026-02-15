@@ -1,4 +1,7 @@
-"""페이퍼/백테스트 전용 전략 로직. 수정 시 라이브에 영향 없음."""
+"""페이퍼/백테스트 전용 전략 로직. 수정 시 라이브에 영향 없음.
+
+횡보장 진입: 박스 하단 4% 이내 롱, 상단 4% 이내 숏. MA(정배열/역배열) 조건 없음 — 반등 반영 전 저점/고점에서 진입.
+"""
 
 from typing import Literal, Optional, List
 
@@ -155,9 +158,10 @@ def swing_strategy_signal(
                 _, _, _, pos = box
                 top = 1.0 - SIDEWAYS_BOX_TOP_MARGIN
                 bottom = SIDEWAYS_BOX_BOTTOM_MARGIN
-                if ma_short > ma_long and pos <= bottom:
+                # 반등 반영 여부 무관: 저점/고점 근처면 진입 (MA 조건 제거)
+                if pos <= bottom:
                     return "long"
-                if ma_short < ma_long and pos >= top:
+                if pos >= top:
                     return "short"
         return "hold"
 
@@ -229,19 +233,7 @@ def get_hold_reason(
         return "박스권 범위 없음"
     box_str = f" | 박스 하단={box_low:.2f} 상단={box_high:.2f}"
     pos_pct = pos * 100
-    top = (1.0 - SIDEWAYS_BOX_TOP_MARGIN) * 100
-    bottom = SIDEWAYS_BOX_BOTTOM_MARGIN * 100
-    ma_short = regime_short_ma if regime_short_ma is not None else short_ma
-    ma_long = regime_long_ma if regime_long_ma is not None else long_ma
-    if ma_short > ma_long:
-        if pos_pct > bottom:
-            return f"횡보장 롱: 가격이 박스 하단 근처 아님{box_str}"
-        return f"횡보장 롱: MA 정배열 but 하단 조건 미충족{box_str}"
-    if ma_short < ma_long:
-        if pos_pct < top:
-            return f"횡보장 숏: 가격이 박스 상단 근처 아님{box_str}"
-        return f"횡보장 숏: MA 역배열 but 상단 조건 미충족{box_str}"
-    return f"횡보장: MA7·MA20 크로스 구간(명확한 정/역배열 아님){box_str}"
+    return f"횡보장: 가격이 박스 하단/상단 근처 아님( pos={pos_pct:.1f}% ){box_str}"
 
 
 def get_entry_reason(
@@ -278,5 +270,5 @@ def get_entry_reason(
     ma_short = regime_short_ma if regime_short_ma is not None else short_ma
     ma_long = regime_long_ma if regime_long_ma is not None else long_ma
     if side == "LONG":
-        return "박스 하단 근처 + MA 정배열(MA7 > MA20)"
-    return "박스 상단 근처 + MA 역배열(MA7 < MA20)"
+        return "박스 하단 근처(저점) 진입"
+    return "박스 상단 근처(고점) 진입"
