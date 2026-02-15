@@ -223,9 +223,10 @@ def get_hold_reason(
     box = _validate_sideways_box(ph, price, period=REGIME_LOOKBACK_15M if regime_price_history else SIDEWAYS_BOX_PERIOD)
     if not box:
         return "박스권 아님 또는 상·하단 터치 부족(2회 미만)"
-    _, box_low, box_range, pos = box
+    box_high, box_low, box_range, pos = box
     if box_range <= 0:
         return "박스권 범위 없음"
+    box_str = f" | 박스 하단={box_low:.2f} 상단={box_high:.2f}"
     pos_pct = pos * 100
     top = (1.0 - SIDEWAYS_BOX_TOP_MARGIN) * 100
     bottom = SIDEWAYS_BOX_BOTTOM_MARGIN * 100
@@ -233,13 +234,13 @@ def get_hold_reason(
     ma_long = regime_long_ma if regime_long_ma is not None else long_ma
     if ma_short > ma_long:
         if pos_pct > bottom:
-            return "횡보장 롱: 가격이 박스 하단 근처 아님"
-        return "횡보장 롱: MA 정배열 but 하단 조건 미충족"
+            return f"횡보장 롱: 가격이 박스 하단 근처 아님{box_str}"
+        return f"횡보장 롱: MA 정배열 but 하단 조건 미충족{box_str}"
     if ma_short < ma_long:
         if pos_pct < top:
-            return "횡보장 숏: 가격이 박스 상단 근처 아님"
-        return "횡보장 숏: MA 역배열 but 상단 조건 미충족"
-    return "횡보장: MA7·MA20 크로스 구간(명확한 정/역배열 아님)"
+            return f"횡보장 숏: 가격이 박스 상단 근처 아님{box_str}"
+        return f"횡보장 숏: MA 역배열 but 상단 조건 미충족{box_str}"
+    return f"횡보장: MA7·MA20 크로스 구간(명확한 정/역배열 아님){box_str}"
 
 
 def get_entry_reason(

@@ -232,7 +232,7 @@ def open_position(
     kr = REGIME_KR.get(regime, regime or "?")
     box_str = ""
     if regime == "sideways" and state.box_high > 0 and state.box_low > 0:
-        box_str = f" | 박스 상단={state.box_high:.2f} 하단={state.box_low:.2f}"
+        box_str = f" | 박스 하단={state.box_low:.2f} 상단={state.box_high:.2f}"
     if pattern_target > 0 and pattern_stop > 0:
         log(f"{side} 진입 | {kr} | {reason} | 가격={price:.2f} 잔고={state.balance:.2f} 투입={trade_capital:.2f} | 패턴={pattern_type} 목표가={pattern_target:.2f} 손절가={pattern_stop:.2f}{box_str}")
     else:
@@ -610,7 +610,7 @@ def main() -> None:
                 regime_str = f" | {REGIME_KR.get(state.entry_regime, state.entry_regime)}" if (state.has_long_position or state.has_short_position) and state.entry_regime else ""
                 box_str = ""
                 if state.entry_regime == "sideways" and state.box_high > 0 and state.box_low > 0:
-                    box_str = f" | 박스 상단={state.box_high:.2f} 하단={state.box_low:.2f}"
+                    box_str = f" | 박스 하단={state.box_low:.2f} 상단={state.box_high:.2f}"
                 # 진입한 봉에서는 진입 로그만 1번 남기고 [5m] 상태 로그는 생략
                 if not just_entered:
                     log(f"[5m] {pos_status}{regime_str}{box_str} 가격={price:.2f} RSI={rsi:.0f} 잔고={state.balance:.2f} PNL={total_pnl:+.2f}{extra}")

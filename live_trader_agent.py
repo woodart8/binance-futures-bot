@@ -358,7 +358,7 @@ def main() -> None:
                                     box_str = ""
                                     if regime == "sideways" and use_15m and len(price_history_15m) >= REGIME_LOOKBACK_15M:
                                         bh, bl = max(price_history_15m[-REGIME_LOOKBACK_15M:]), min(price_history_15m[-REGIME_LOOKBACK_15M:])
-                                        box_str = f" 박스 상단={bh:.2f} 하단={bl:.2f}"
+                                        box_str = f" 박스 하단={bl:.2f} 상단={bh:.2f}"
                                     log(f"LONG 진입 | {regime_kr} | 가격={mkt_price:.2f} 잔고={balance:.2f} 투입={order_usdt:.2f} USDT{entry_tp_sl}{box_str}")
                                     has_position, is_long = True, True
                                     entry_price, highest_price = mkt_price, mkt_price
@@ -380,7 +380,7 @@ def main() -> None:
                                     box_str = ""
                                     if regime == "sideways" and use_15m and len(price_history_15m) >= REGIME_LOOKBACK_15M:
                                         bh, bl = max(price_history_15m[-REGIME_LOOKBACK_15M:]), min(price_history_15m[-REGIME_LOOKBACK_15M:])
-                                        box_str = f" 박스 상단={bh:.2f} 하단={bl:.2f}"
+                                        box_str = f" 박스 하단={bl:.2f} 상단={bh:.2f}"
                                     log(f"SHORT 진입 | {regime_kr} | 가격={mkt_price:.2f} 잔고={balance:.2f} 투입={order_usdt:.2f} USDT{entry_tp_sl}{box_str}")
                                     has_position, is_long = True, False
                                     entry_price, lowest_price = mkt_price, mkt_price
@@ -412,11 +412,11 @@ def main() -> None:
                 regime_str = f" | {REGIME_KR.get(entry_regime, entry_regime)}" if has_position and entry_regime else ""
                 box_str = ""
                 if has_position and entry_regime == "sideways" and box_high_entry > 0 and box_low_entry > 0:
-                    box_str = f" | 박스 상단={box_high_entry:.2f} 하단={box_low_entry:.2f}"
+                    box_str = f" | 박스 하단={box_low_entry:.2f} 상단={box_high_entry:.2f}"
                 elif not has_position and regime == "sideways" and price_history_15m and len(price_history_15m) >= REGIME_LOOKBACK_15M:
                     bh = max(price_history_15m[-REGIME_LOOKBACK_15M:])
                     bl = min(price_history_15m[-REGIME_LOOKBACK_15M:])
-                    box_str = f" | 박스 상단={bh:.2f} 하단={bl:.2f}"
+                    box_str = f" | 박스 하단={bl:.2f} 상단={bh:.2f}"
                 log(f"[5분] {pos_status}{regime_str}{box_str} | 가격={price:.2f} RSI={rsi:.0f} 잔고={bal:.2f}{unrealized}")
 
                 last_candle_time = latest_time
