@@ -14,6 +14,7 @@ from config import (
     MA_MID_PERIOD,
     MA_LONGEST_PERIOD,
     RSI_PERIOD,
+    TREND_SLOPE_BARS,
 )
 from indicators import calculate_ma, calculate_rsi
 from strategy_core import detect_market_regime
