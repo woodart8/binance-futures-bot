@@ -399,22 +399,10 @@ def get_hold_reason(
         return "MA20 기울기 데이터 부족 또는 추세 방향 불명확"
 
     if regime == "neutral":
-        # 중립 이유 상세 분석
+        # 중립 이유 상세 분석 (detect_market_regime 순서와 동일하게)
         reasons = []
         
-        # 1) 추세장 조건 체크
-        if not regime_ma_long_history or len(regime_ma_long_history) < TREND_SLOPE_BARS:
-            reasons.append(f"MA20 데이터 부족 ({len(regime_ma_long_history) if regime_ma_long_history else 0}/{TREND_SLOPE_BARS}개)")
-        elif regime_ma_long_history and len(regime_ma_long_history) >= TREND_SLOPE_BARS:
-            recent_ma20 = regime_ma_long_history[-TREND_SLOPE_BARS:]
-            ma20_start = recent_ma20[0]
-            ma20_end = recent_ma20[-1]
-            if ma20_start and ma20_start > 0:
-                slope_pct = (ma20_end - ma20_start) / ma20_start * 100.0
-                if abs(slope_pct) < TREND_SLOPE_MIN_PCT:
-                    reasons.append(f"MA20 기울기 {slope_pct:+.2f}% (기준 ±{TREND_SLOPE_MIN_PCT}% 미만)")
-        
-        # 2) detect_market_regime의 조건: long_ma <= 0 or ma_50 <= 0 or ma_100 <= 0 체크
+        # 1) detect_market_regime의 조건: long_ma <= 0 or ma_50 <= 0 or ma_100 <= 0 체크 (가장 먼저)
         regime_long_ma_val = regime_long_ma if regime_long_ma is not None else long_ma
         if regime_long_ma_val <= 0 or (regime_ma_50 is not None and regime_ma_50 <= 0) or (regime_ma_100 is not None and regime_ma_100 <= 0):
             ma_issues = []
@@ -426,7 +414,19 @@ def get_hold_reason(
                 ma_issues.append(f"MA100={regime_ma_100:.2f}")
             if ma_issues:
                 reasons.append(f"long_ma/ma_50/ma_100 체크 실패 ({', '.join(ma_issues)})")
-        elif regime_price_history and len(regime_price_history) >= REGIME_LOOKBACK_15M:
+        # 2) 추세장 조건 체크 (long_ma/ma_50/ma_100이 모두 양수일 때만)
+        elif not regime_ma_long_history or len(regime_ma_long_history) < TREND_SLOPE_BARS:
+            reasons.append(f"MA20 데이터 부족 ({len(regime_ma_long_history) if regime_ma_long_history else 0}/{TREND_SLOPE_BARS}개)")
+        elif regime_ma_long_history and len(regime_ma_long_history) >= TREND_SLOPE_BARS:
+            recent_ma20 = regime_ma_long_history[-TREND_SLOPE_BARS:]
+            ma20_start = recent_ma20[0]
+            ma20_end = recent_ma20[-1]
+            if ma20_start and ma20_start > 0:
+                slope_pct = (ma20_end - ma20_start) / ma20_start * 100.0
+                if abs(slope_pct) < TREND_SLOPE_MIN_PCT:
+                    reasons.append(f"MA20 기울기 {slope_pct:+.2f}% (기준 ±{TREND_SLOPE_MIN_PCT}% 미만)")
+        # 3) 횡보장 조건 체크
+        if regime_price_history and len(regime_price_history) >= REGIME_LOOKBACK_15M:
             # 3) 횡보장 조건 체크
             bounds = get_sideways_box_bounds(regime_price_history, REGIME_LOOKBACK_15M)
             if not bounds:
