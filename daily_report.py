@@ -12,8 +12,8 @@
   SMTP_PASSWORD=비밀번호
 """
 
-import ast
 import csv
+import json
 import smtplib
 from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
@@ -30,11 +30,18 @@ REGIME_KR = {"sideways": "횡보장", "trend": "추세장", "neutral": "중립"}
 
 
 def _parse_meta(meta_str: str) -> dict:
-    """meta 컬럼 문자열을 dict로 파싱"""
-    try:
-        return ast.literal_eval(meta_str) if meta_str else {}
-    except (ValueError, SyntaxError):
+    """meta 컬럼 JSON 문자열을 dict로 파싱"""
+    if not meta_str or not meta_str.strip():
         return {}
+    try:
+        return json.loads(meta_str)
+    except (json.JSONDecodeError, ValueError):
+        # 이전 형식(repr) 호환성 유지
+        try:
+            import ast
+            return ast.literal_eval(meta_str)
+        except (ValueError, SyntaxError):
+            return {}
 
 
 def _to_kst(dt_utc: datetime) -> datetime:
@@ -56,10 +63,17 @@ def get_previous_day_trades() -> list[dict]:
         reader = csv.DictReader(f)
         for row in reader:
             try:
-                ts = datetime.fromisoformat(row["time_utc"].replace("Z", "+00:00"))
-            except (ValueError, KeyError):
+                ts_str = row["time_utc"]
+                # ISO 형식 파싱 (Z 또는 +00:00 처리)
+                if ts_str.endswith("Z"):
+                    ts_str = ts_str[:-1] + "+00:00"
+                elif "+" not in ts_str and "-" in ts_str[-6:]:
+                    ts_str = ts_str + "+00:00"
+                ts = datetime.fromisoformat(ts_str)
+            except (ValueError, KeyError) as e:
                 continue
             ts_kst = _to_kst(ts)
+            # 시간 순으로 정렬되어 있다고 가정: 전날 이후 날짜가 나오면 중단
             if ts_kst.date() > yesterday:
                 break  # 시간 순이므로 이후 행은 모두 오늘 이후 → 조기 종료
             if ts_kst.date() == yesterday:

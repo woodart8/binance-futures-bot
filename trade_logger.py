@@ -5,6 +5,7 @@
 """
 
 import csv
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -23,6 +24,7 @@ def log_trade(
     balance_after: float,
     meta: Optional[Dict[str, Any]] = None,
 ) -> None:
+    """매매 기록을 CSV에 저장. meta는 JSON 문자열로 저장."""
     row = [
         datetime.now(timezone.utc).isoformat(),
         side,
@@ -30,7 +32,7 @@ def log_trade(
         round(exit_price, 6),
         round(pnl, 6),
         round(balance_after, 6),
-        meta or {},
+        json.dumps(meta or {}, ensure_ascii=False),
     ]
     is_new = not LOG_FILE.exists()
     with LOG_FILE.open("a", newline="", encoding="utf-8") as f:
@@ -49,7 +51,7 @@ def log_funding(
     balance_after: float,
     meta: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """펀딩비 발생 시 기록 (funding_log.csv)."""
+    """펀딩비 발생 시 기록 (funding_log.csv). meta는 JSON 문자열로 저장."""
     row = [
         datetime.now(timezone.utc).isoformat(),
         funding_utc_key,
@@ -58,7 +60,7 @@ def log_funding(
         round(funding_rate, 8),
         round(funding_pnl, 6),
         round(balance_after, 6),
-        meta or {},
+        json.dumps(meta or {}, ensure_ascii=False),
     ]
     is_new = not FUNDING_LOG_FILE.exists()
     with FUNDING_LOG_FILE.open("a", newline="", encoding="utf-8") as f:
