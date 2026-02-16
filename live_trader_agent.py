@@ -54,7 +54,9 @@ def main() -> None:
     # MA100은 15분봉 기준 100개 필요 = 5분봉 기준 300개
     # REGIME_LOOKBACK_15M은 15분봉 기준 96개 = 5분봉 기준 288개
     # 충분한 데이터 확보를 위해 여유분 추가
-    limit = max(MA_LONGEST_PERIOD * 3, REGIME_LOOKBACK_15M * 3) + 100
+    # MA100 계산 후 최근 96개 사용을 위해 최소 196개 15분봉 필요 = 588개 5분봉
+    # 충분한 데이터 확보를 위해 여유분 추가 (resample 후 데이터 손실 고려)
+    limit = (MA_LONGEST_PERIOD + REGIME_LOOKBACK_15M) * 3 + 200
 
     try:
         while True:

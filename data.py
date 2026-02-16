@@ -76,17 +76,20 @@ def compute_regime_15m(df: pd.DataFrame, current_price: float) -> tuple:
     df_15m["ma_100"] = calculate_ma(df_15m["close"], MA_LONGEST_PERIOD)
     df_15m["rsi"] = calculate_rsi(df_15m["close"], RSI_PERIOD)
     # dropna()를 하면 MA100 계산 전의 행들이 제거되어 데이터가 부족해짐
-    # 대신 필요한 값들만 체크하여 사용
+    # MA100 계산을 위해서는 전체 데이터가 필요하므로 dropna() 제거
     df_15m = df_15m.reset_index()
-    # MA100이 계산된 행이 있는지 확인 (최소 100개 필요)
+    # MA100 계산을 위해 최소 100개 필요
     if len(df_15m) < MA_LONGEST_PERIOD:
         return ("neutral", 0.0, 0.0, 0.0, 0.0, [], None, [])
-    # 최근 REGIME_LOOKBACK_15M개 중 MA100이 계산된 행만 사용
+    # MA100이 계산된 마지막 행 확인
+    if df_15m["ma_100"].isna().all():
+        return ("neutral", 0.0, 0.0, 0.0, 0.0, [], None, [])
+    # 최근 REGIME_LOOKBACK_15M개 사용 (MA100이 계산된 행만)
+    # 전체 데이터에서 MA100 계산 후, 최근 96개만 사용
     df_15m_valid = df_15m[df_15m["ma_100"].notna()]
     if len(df_15m_valid) < REGIME_LOOKBACK_15M:
         return ("neutral", 0.0, 0.0, 0.0, 0.0, [], None, [])
     # 최근 24시간(REGIME_LOOKBACK_15M)만 사용
-    # MA100이 계산된 최근 REGIME_LOOKBACK_15M개 사용
     df_15m_recent = df_15m_valid.tail(REGIME_LOOKBACK_15M).copy()
     last = df_15m_recent.iloc[-1]
     tail = df_15m_recent.tail(REGIME_LOOKBACK_15M)
