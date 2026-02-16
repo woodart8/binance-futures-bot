@@ -615,16 +615,18 @@ def log_5m_status(exchange, state: Dict[str, Any], df: pd.DataFrame) -> None:
                     if abs(slope_pct) < TREND_SLOPE_MIN_PCT:
                         reasons.append(f"MA20 기울기 {slope_pct:+.2f}% (기준 ±{TREND_SLOPE_MIN_PCT}% 미만, 시작={ma20_start:.2f} 끝={ma20_end:.2f})")
             
-            # 2) 횡보장 조건 체크
-            ma_issues = []
-            if long_ma_15m <= 0:
-                ma_issues.append(f"MA20={long_ma_15m:.2f}")
-            if ma_50_15m <= 0:
-                ma_issues.append(f"MA50={ma_50_15m:.2f}")
-            if ma_100_15m <= 0:
-                ma_issues.append(f"MA100={ma_100_15m:.2f}")
-            if ma_issues:
-                reasons.append(f"MA 데이터 부족 ({', '.join(ma_issues)})")
+            # 2) detect_market_regime의 조건: long_ma <= 0 or ma_50 <= 0 or ma_100 <= 0 체크
+            if long_ma_15m <= 0 or ma_50_15m <= 0 or ma_100_15m <= 0:
+                ma_issues = []
+                if long_ma_15m <= 0:
+                    ma_issues.append(f"MA20={long_ma_15m:.2f} (필요 {MA_LONG_PERIOD}개)")
+                if ma_50_15m <= 0:
+                    ma_issues.append(f"MA50={ma_50_15m:.2f} (필요 {MA_MID_PERIOD}개)")
+                if ma_100_15m <= 0:
+                    ma_issues.append(f"MA100={ma_100_15m:.2f} (필요 {MA_LONGEST_PERIOD}개)")
+                # 현재 데이터 개수 확인 (15분봉 기준)
+                df_15m_len = len(df) // 3 if len(df) >= 3 else 0
+                reasons.append(f"중립 이유: long_ma/ma_50/ma_100 체크 실패 ({', '.join(ma_issues)}, 현재 {df_15m_len}개 15분봉)")
             elif not price_history_15m or len(price_history_15m) < REGIME_LOOKBACK_15M:
                 reasons.append(f"가격 데이터 부족 ({len(price_history_15m) if price_history_15m else 0}/{REGIME_LOOKBACK_15M}개)")
             else:
