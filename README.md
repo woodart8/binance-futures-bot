@@ -93,5 +93,6 @@
 - **funding.py** — 펀딩 레이트 조회, 00/08/16 UTC 정산·손익 계산  
 - **config_common.py** — 공통 상수 설정  
 - **backtest.py** / **analyze_backtest.py** — 백테스트 및 장별 분석 (펀딩 옵션: `exchange` 인자)  
-- **trade_logger.py** — 매매 기록 `trades_log.csv`, 펀딩 기록 `funding_log.csv`  
+- **trade_logger.py** — 매매 기록 `trades_log.csv`, 펀딩 기록 `funding_log.csv` (meta 필드는 JSON 형식)  
+- **daily_report.py** — 일일 매매 결과 리포트 이메일 전송 (`trades_log.csv` 기반, 전날 거래 내역 요약)  
 - **data.py** — OHLCV 데이터 수집 및 장세 계산  
