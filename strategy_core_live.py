@@ -406,9 +406,12 @@ def get_hold_reason(
                 else:
                     ma_issues.append(f"MA100={regime_ma_100_val:.2f}")
             if ma_issues:
-                reasons.append(f"long_ma/ma_50/ma_100 체크 실패 ({', '.join(ma_issues)})")
+                reasons.append(f"MA 데이터 부족 ({', '.join(ma_issues)})")
+            # long_ma/ma_50/ma_100이 0 이하일 때 이것만 반환 (가장 중요한 이유)
+            if reasons:
+                return f"중립: {', '.join(reasons)}"
         # 2) 추세장 조건 체크 (long_ma/ma_50/ma_100이 모두 양수일 때만)
-        elif not regime_ma_long_history or len(regime_ma_long_history) < TREND_SLOPE_BARS:
+        if not regime_ma_long_history or len(regime_ma_long_history) < TREND_SLOPE_BARS:
             reasons.append(f"MA20 데이터 부족 ({len(regime_ma_long_history) if regime_ma_long_history else 0}/{TREND_SLOPE_BARS}개)")
         elif regime_ma_long_history and len(regime_ma_long_history) >= TREND_SLOPE_BARS:
             recent_ma20 = regime_ma_long_history[-TREND_SLOPE_BARS:]

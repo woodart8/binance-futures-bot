@@ -75,12 +75,19 @@ def compute_regime_15m(df: pd.DataFrame, current_price: float) -> tuple:
     df_15m["ma_50"] = calculate_ma(df_15m["close"], MA_MID_PERIOD)
     df_15m["ma_100"] = calculate_ma(df_15m["close"], MA_LONGEST_PERIOD)
     df_15m["rsi"] = calculate_rsi(df_15m["close"], RSI_PERIOD)
-    df_15m = df_15m.dropna().reset_index()
-    if len(df_15m) < REGIME_LOOKBACK_15M:
+    # dropna()를 하면 MA100 계산 전의 행들이 제거되어 데이터가 부족해짐
+    # 대신 필요한 값들만 체크하여 사용
+    df_15m = df_15m.reset_index()
+    # MA100이 계산된 행이 있는지 확인 (최소 100개 필요)
+    if len(df_15m) < MA_LONGEST_PERIOD:
+        return ("neutral", 0.0, 0.0, 0.0, 0.0, [], None, [])
+    # 최근 REGIME_LOOKBACK_15M개 중 MA100이 계산된 행만 사용
+    df_15m_valid = df_15m[df_15m["ma_100"].notna()]
+    if len(df_15m_valid) < REGIME_LOOKBACK_15M:
         return ("neutral", 0.0, 0.0, 0.0, 0.0, [], None, [])
     # 최근 24시간(REGIME_LOOKBACK_15M)만 사용
-    # 하지만 MA100 계산은 전체 데이터에서 수행 (충분한 데이터 확보)
-    df_15m_recent = df_15m.tail(REGIME_LOOKBACK_15M).copy()
+    # MA100이 계산된 최근 REGIME_LOOKBACK_15M개 사용
+    df_15m_recent = df_15m_valid.tail(REGIME_LOOKBACK_15M).copy()
     last = df_15m_recent.iloc[-1]
     tail = df_15m_recent.tail(REGIME_LOOKBACK_15M)
     price_history_15m = list(zip(
@@ -88,14 +95,14 @@ def compute_regime_15m(df: pd.DataFrame, current_price: float) -> tuple:
         tail["low"].tolist(),
         tail["close"].tolist(),
     ))
-    # MA 값은 전체 데이터에서 계산된 값을 사용 (MA100이 정상 계산되도록)
-    short_ma_15m = float(df_15m.iloc[-1]["ma_short"])
-    long_ma_15m = float(df_15m.iloc[-1]["ma_long"])
-    ma_50_15m = float(df_15m.iloc[-1]["ma_50"])
-    ma_100_15m = float(df_15m.iloc[-1]["ma_100"])
-    rsi_15m = float(df_15m.iloc[-1]["rsi"])
-    # MA20 히스토리 (추세장 판단용) - 전체 데이터에서 계산하되 최근 96개만 사용
-    ma_long_history = df_15m["ma_long"].dropna().tolist()
+    # MA 값은 최근 유효한 데이터에서 사용 (MA100이 정상 계산되도록)
+    short_ma_15m = float(df_15m_recent.iloc[-1]["ma_short"])
+    long_ma_15m = float(df_15m_recent.iloc[-1]["ma_long"])
+    ma_50_15m = float(df_15m_recent.iloc[-1]["ma_50"])
+    ma_100_15m = float(df_15m_recent.iloc[-1]["ma_100"])
+    rsi_15m = float(df_15m_recent.iloc[-1]["rsi"])
+    # MA20 히스토리 (추세장 판단용) - 유효한 데이터에서 계산하되 최근 96개만 사용
+    ma_long_history = df_15m_valid["ma_long"].tail(TREND_SLOPE_BARS).tolist()
     regime = detect_market_regime(
         short_ma_15m, long_ma_15m, current_price,
         ma_50_15m, ma_100_15m,
