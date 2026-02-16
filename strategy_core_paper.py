@@ -350,6 +350,7 @@ def get_hold_reason(
     regime_ma_50: Optional[float] = None,
     regime_ma_100: Optional[float] = None,
     regime_price_history: Optional[PriceHistory] = None,
+    regime_ma_long_history: Optional[List[float]] = None,
     price_history: Optional[PriceHistory] = None,
 ) -> str:
     if regime == "trend":
