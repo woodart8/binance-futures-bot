@@ -20,9 +20,8 @@ from config import (
     TREND_STOP_LOSS_PRICE,
 )
 from data import compute_regime_15m
-from chart_patterns import detect_chart_pattern, PATTERN_LOOKBACK
 from strategy_core import REGIME_KR, swing_strategy_signal, get_sideways_box_bounds
-from exit_logic import check_long_exit, check_short_exit
+from exit_logic import check_long_exit, check_short_exit, reason_to_display_message
 from trade_logger import log_trade
 from logger import log
 
@@ -48,9 +47,6 @@ def init_live_state() -> Dict[str, Any]:
         "lowest_price": float("inf"),
         "trailing_stop_active": False,
         "best_pnl_pct": 0.0,
-        "pattern_type": "",
-        "pattern_target": 0.0,
-        "pattern_stop": 0.0,
         "daily_start_balance": 0.0,
         "daily_start_date": "",
         "consecutive_loss_count": 0,
@@ -77,15 +73,12 @@ def check_tp_sl_and_close(exchange, state: Dict[str, Any], current_price: float,
     highest_price = state["highest_price"]
     lowest_price = state["lowest_price"]
     best_pnl_pct = state["best_pnl_pct"]
-    pattern_type = state["pattern_type"]
-    pattern_target = state["pattern_target"]
-    pattern_stop = state["pattern_stop"]
     daily_start_balance = state["daily_start_balance"]
     daily_start_date = state["daily_start_date"]
     consecutive_loss_count = state["consecutive_loss_count"]
 
     if len(df) >= REGIME_LOOKBACK_15M * 3:
-        regime, _, _, _, _, price_history_15m, _, _, _ = compute_regime_15m(df, current_price)
+        regime, _, _, _, _, price_history_15m, _, _ = compute_regime_15m(df, current_price)
     else:
         regime = "neutral"
 
@@ -102,48 +95,35 @@ def check_tp_sl_and_close(exchange, state: Dict[str, Any], current_price: float,
             best_pnl_pct = pnl_pct
 
     signal = None
-    pattern_tp_sl_triggered = False
-    if pattern_target > 0 and pattern_stop > 0:
-        if is_long:
-            if current_price >= pattern_target or current_price <= pattern_stop:
-                signal = "flat"
-                pattern_tp_sl_triggered = True
-        else:
-            if current_price <= pattern_target or current_price >= pattern_stop:
-                signal = "flat"
-                pattern_tp_sl_triggered = True
-
-    if signal is None and not (pattern_target > 0 and pattern_stop > 0) and is_long:
+    close_reason = ""
+    if is_long:
         reg = entry_regime or ""
         reason = check_long_exit(
-            regime=reg, pnl_pct=pnl_pct, rsi=rsi, price=current_price,
+            regime=reg, pnl_pct=pnl_pct, price=current_price,
             entry_price=entry_price, best_pnl_pct=best_pnl_pct,
             box_high=box_high_entry, box_low=box_low_entry,
         )
         if reason:
             signal = "flat"
+            close_reason = reason_to_display_message(reason, is_long=True)
 
-    if signal is None and not (pattern_target > 0 and pattern_stop > 0) and not is_long:
+    if signal is None and not is_long:
         reg = entry_regime or ""
         reason = check_short_exit(
-            regime=reg, pnl_pct=pnl_pct, rsi=rsi, price=current_price,
+            regime=reg, pnl_pct=pnl_pct, price=current_price,
             entry_price=entry_price, best_pnl_pct=best_pnl_pct,
             box_high=box_high_entry, box_low=box_low_entry,
         )
         if reason:
             signal = "flat"
+            close_reason = reason_to_display_message(reason, is_long=False)
 
     if signal != "flat":
         out = {**state, "highest_price": highest_price, "lowest_price": lowest_price, "best_pnl_pct": best_pnl_pct}
         return (out, False)
 
-    if pattern_target > 0 and pattern_stop > 0 and not pattern_tp_sl_triggered:
-        out = {**state, "highest_price": highest_price, "lowest_price": lowest_price, "best_pnl_pct": best_pnl_pct}
-        return (out, False)
-
-    close_reason = "전략청산"
-    if pattern_tp_sl_triggered and pattern_type:
-        close_reason = f"패턴익절({pattern_type})" if (is_long and current_price >= pattern_target) or (not is_long and current_price <= pattern_target) else f"패턴손절({pattern_type})"
+    if not close_reason:
+        close_reason = "전략청산"
     try:
         balance = get_balance_usdt(exchange)
     except Exception as e:
@@ -213,9 +193,6 @@ def check_tp_sl_and_close(exchange, state: Dict[str, Any], current_price: float,
         "highest_price": 0.0,
         "lowest_price": float("inf"),
         "best_pnl_pct": 0.0,
-        "pattern_type": "",
-        "pattern_target": 0.0,
-        "pattern_stop": 0.0,
         "entry_balance": new_balance,
         "consecutive_loss_count": consecutive_loss_count,
         "daily_start_balance": daily_start_balance,
@@ -243,9 +220,9 @@ def try_live_entry(exchange, state: Dict[str, Any], df: pd.DataFrame, current_pr
     open_curr = float(latest["open"])
 
     if len(df) >= REGIME_LOOKBACK_15M * 3:
-        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, _, _, _ = compute_regime_15m(df, current_price)
+        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, ma_long_history = compute_regime_15m(df, current_price)
     else:
-        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m = "neutral", 0.0, 0.0, 0.0, 0.0, []
+        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, ma_long_history = "neutral", 0.0, 0.0, 0.0, 0.0, [], 0.0, []
     if len(df) >= SIDEWAYS_BOX_PERIOD:
         tail = df.tail(SIDEWAYS_BOX_PERIOD + 1)
         price_history = list(zip(tail["high"].tolist(), tail["low"].tolist(), tail["close"].tolist()))
@@ -272,6 +249,7 @@ def try_live_entry(exchange, state: Dict[str, Any], df: pd.DataFrame, current_pr
         regime_ma_50=ma_50_15m if use_15m else None,
         regime_ma_100=ma_100_15m if use_15m else None,
         regime_price_history=regime_price_hist,
+        regime_ma_long_history=ma_long_history if use_15m else None,
         macd_line=None,
         macd_signal=None,
     )
@@ -309,34 +287,18 @@ def try_live_entry(exchange, state: Dict[str, Any], df: pd.DataFrame, current_pr
         return (state, False)
 
     amount = order_usdt / current_price
-    pattern_info = None
-    if len(df) >= PATTERN_LOOKBACK * 3:
-        df_tmp = df.copy()
-        df_tmp["timestamp"] = pd.to_datetime(df_tmp["timestamp"])
-        df_15m = df_tmp.set_index("timestamp").resample("15min").agg(
-            {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
-        ).dropna()
-        if len(df_15m) >= PATTERN_LOOKBACK:
-            highs = df_15m["high"].iloc[-PATTERN_LOOKBACK:].tolist()
-            lows = df_15m["low"].iloc[-PATTERN_LOOKBACK:].tolist()
-            closes = df_15m["close"].iloc[-PATTERN_LOOKBACK:].tolist()
-            pattern_info = detect_chart_pattern(highs, lows, closes, current_price)
 
     try:
         if signal == "long":
             exchange.create_market_buy_order(SYMBOL, amount)
-            pt, ptg, pst = ("", 0.0, 0.0) if not (pattern_info and pattern_info.side == "LONG") else (pattern_info.name, pattern_info.target_price, pattern_info.stop_price)
             regime_kr = REGIME_KR.get(regime, regime)
-            if pt:
-                entry_tp_sl = f" 패턴={pt} 목표가={ptg:.2f} 손절가={pst:.2f}"
-            else:
-                is_trend = regime == "neutral"
-                tp_pct = TREND_PROFIT_TARGET if is_trend else SIDEWAYS_PROFIT_TARGET
-                sl_pct = TREND_STOP_LOSS_PRICE if is_trend else SIDEWAYS_STOP_LOSS_PRICE
-                pct_per_leverage = 1.0 / LEVERAGE
-                tg = current_price * (1 + tp_pct / 100 * pct_per_leverage)
-                st = current_price * (1 - sl_pct / 100 * pct_per_leverage)
-                entry_tp_sl = f" 목표가={tg:.2f} 손절가={st:.2f}"
+            is_trend = regime == "trend"
+            tp_pct = TREND_PROFIT_TARGET if is_trend else SIDEWAYS_PROFIT_TARGET
+            sl_pct = TREND_STOP_LOSS_PRICE if is_trend else SIDEWAYS_STOP_LOSS_PRICE
+            pct_per_leverage = 1.0 / LEVERAGE
+            tg = current_price * (1 + tp_pct / 100 * pct_per_leverage)
+            st = current_price * (1 - sl_pct / 100 * pct_per_leverage)
+            entry_tp_sl = f" 목표가={tg:.2f} 손절가={st:.2f}"
             box_str = ""
             bounds = get_sideways_box_bounds(price_history_15m, REGIME_LOOKBACK_15M) if regime == "sideways" and use_15m and len(price_history_15m) >= REGIME_LOOKBACK_15M else None
             if bounds:
@@ -352,9 +314,6 @@ def try_live_entry(exchange, state: Dict[str, Any], df: pd.DataFrame, current_pr
                 "is_long": True,
                 "entry_price": current_price,
                 "highest_price": current_price,
-                "pattern_type": pt,
-                "pattern_target": ptg,
-                "pattern_stop": pst,
                 "entry_regime": regime,
                 "entry_balance": balance,
                 "best_pnl_pct": 0.0,
@@ -367,18 +326,14 @@ def try_live_entry(exchange, state: Dict[str, Any], df: pd.DataFrame, current_pr
             }
         else:
             exchange.create_market_sell_order(SYMBOL, amount)
-            pt, ptg, pst = ("", 0.0, 0.0) if not (pattern_info and pattern_info.side == "SHORT") else (pattern_info.name, pattern_info.target_price, pattern_info.stop_price)
             regime_kr = REGIME_KR.get(regime, regime)
-            if pt:
-                entry_tp_sl = f" 패턴={pt} 목표가={ptg:.2f} 손절가={pst:.2f}"
-            else:
-                is_trend = regime == "neutral"
-                tp_pct = TREND_PROFIT_TARGET if is_trend else SIDEWAYS_PROFIT_TARGET
-                sl_pct = TREND_STOP_LOSS_PRICE if is_trend else SIDEWAYS_STOP_LOSS_PRICE
-                pct_per_leverage = 1.0 / LEVERAGE
-                tg = current_price * (1 - tp_pct / 100 * pct_per_leverage)
-                st = current_price * (1 + sl_pct / 100 * pct_per_leverage)
-                entry_tp_sl = f" 목표가={tg:.2f} 손절가={st:.2f}"
+            is_trend = regime == "trend"
+            tp_pct = TREND_PROFIT_TARGET if is_trend else SIDEWAYS_PROFIT_TARGET
+            sl_pct = TREND_STOP_LOSS_PRICE if is_trend else SIDEWAYS_STOP_LOSS_PRICE
+            pct_per_leverage = 1.0 / LEVERAGE
+            tg = current_price * (1 - tp_pct / 100 * pct_per_leverage)
+            st = current_price * (1 + sl_pct / 100 * pct_per_leverage)
+            entry_tp_sl = f" 목표가={tg:.2f} 손절가={st:.2f}"
             box_str = ""
             bounds = get_sideways_box_bounds(price_history_15m, REGIME_LOOKBACK_15M) if regime == "sideways" and use_15m and len(price_history_15m) >= REGIME_LOOKBACK_15M else None
             if bounds:
@@ -394,9 +349,6 @@ def try_live_entry(exchange, state: Dict[str, Any], df: pd.DataFrame, current_pr
                 "is_long": False,
                 "entry_price": current_price,
                 "lowest_price": current_price,
-                "pattern_type": pt,
-                "pattern_target": ptg,
-                "pattern_stop": pst,
                 "entry_regime": regime,
                 "entry_balance": balance,
                 "best_pnl_pct": 0.0,
@@ -436,17 +388,14 @@ def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tu
     highest_price = state["highest_price"]
     lowest_price = state["lowest_price"]
     best_pnl_pct = state["best_pnl_pct"]
-    pattern_type = state["pattern_type"]
-    pattern_target = state["pattern_target"]
-    pattern_stop = state["pattern_stop"]
     daily_start_balance = state["daily_start_balance"]
     daily_start_date = state["daily_start_date"]
     consecutive_loss_count = state["consecutive_loss_count"]
 
     if len(df) >= REGIME_LOOKBACK_15M * 3:
-        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, macd_line_15m, macd_signal_15m = compute_regime_15m(df, price)
+        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, ma_long_history = compute_regime_15m(df, price)
     else:
-        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m = "neutral", 0.0, 0.0, 0.0, 0.0, []
+        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, ma_long_history = "neutral", 0.0, 0.0, 0.0, 0.0, [], 0.0, []
 
     if len(df) >= SIDEWAYS_BOX_PERIOD:
         tail = df.tail(SIDEWAYS_BOX_PERIOD + 1)
@@ -456,43 +405,32 @@ def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tu
     use_15m = len(price_history_15m) >= REGIME_LOOKBACK_15M
 
     signal = None
-    pattern_tp_sl_triggered = False
 
     if has_position:
         pnl_pct = (price - entry_price) / entry_price * LEVERAGE * 100 if is_long else (entry_price - price) / entry_price * LEVERAGE * 100
 
-        if pattern_target > 0 and pattern_stop > 0:
-            if is_long:
-                if price >= pattern_target or price <= pattern_stop:
-                    signal = "flat"
-                    pattern_tp_sl_triggered = True
-            else:
-                if price <= pattern_target or price >= pattern_stop:
-                    signal = "flat"
-                    pattern_tp_sl_triggered = True
-
-        if signal is None and not (pattern_target > 0 and pattern_stop > 0) and is_long:
+        if signal is None and is_long:
             if price > highest_price:
                 highest_price = price
             if pnl_pct > best_pnl_pct:
                 best_pnl_pct = pnl_pct
             reg = entry_regime or ""
             reason = check_long_exit(
-                regime=reg, pnl_pct=pnl_pct, rsi=rsi, price=price,
+                regime=reg, pnl_pct=pnl_pct, price=price,
                 entry_price=entry_price, best_pnl_pct=best_pnl_pct,
                 box_high=box_high_entry or 0, box_low=box_low_entry or 0,
             )
             if reason:
                 signal = "flat"
 
-        if signal is None and not (pattern_target > 0 and pattern_stop > 0) and not is_long:
+        if signal is None and not is_long:
             if price < lowest_price:
                 lowest_price = price
             if pnl_pct > best_pnl_pct:
                 best_pnl_pct = pnl_pct
             reg = entry_regime or ""
             reason = check_short_exit(
-                regime=reg, pnl_pct=pnl_pct, rsi=rsi, price=price,
+                regime=reg, pnl_pct=pnl_pct, price=price,
                 entry_price=entry_price, best_pnl_pct=best_pnl_pct,
                 box_high=box_high_entry or 0, box_low=box_low_entry or 0,
             )
@@ -519,13 +457,8 @@ def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tu
     consecutive_limit_hit = consecutive_loss_count >= CONSECUTIVE_LOSS_LIMIT
 
     if has_position and signal == "flat":
-        if pattern_target > 0 and pattern_stop > 0 and not pattern_tp_sl_triggered:
-            pass
-        else:
-            close_reason = "전략청산"
-            if pattern_tp_sl_triggered and pattern_type:
-                close_reason = f"패턴익절({pattern_type})" if (is_long and price >= pattern_target) or (not is_long and price <= pattern_target) else f"패턴손절({pattern_type})"
-            try:
+        close_reason = "전략청산"
+        try:
                 positions = exchange.fetch_positions([SYMBOL])
             except Exception as e:
                 log(f"포지션 조회 실패: {e}", "ERROR")
@@ -583,15 +516,12 @@ def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tu
                 "has_position": False,
                 "is_long": False,
                 "entry_price": 0.0,
-                "entry_regime": "",
-                "box_high_entry": 0.0,
+        "entry_regime": "",
+        "box_high_entry": 0.0,
                 "box_low_entry": 0.0,
                 "highest_price": 0.0,
                 "lowest_price": float("inf"),
                 "best_pnl_pct": 0.0,
-                "pattern_type": "",
-                "pattern_target": 0.0,
-                "pattern_stop": 0.0,
                 "entry_balance": new_balance,
                 "consecutive_loss_count": consecutive_loss_count,
                 "daily_start_balance": daily_start_balance,

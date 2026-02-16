@@ -26,7 +26,7 @@ load_dotenv()
 
 LOG_FILE = Path("trades_log.csv")
 KST = timezone(timedelta(hours=9))
-REGIME_KR = {"sideways": "횡보장", "neutral": "추세장"}
+REGIME_KR = {"sideways": "횡보장", "trend": "추세장", "neutral": "중립"}
 
 
 def _parse_meta(meta_str: str) -> dict:

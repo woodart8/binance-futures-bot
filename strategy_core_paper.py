@@ -2,6 +2,13 @@
 
 횡보장: 박스 = 간격 2시간 이상인 고가 2개→상단, 저가 2개→하단. 기울기 0.5% 이내·상하단 비슷. 터치 조건 없음.
 진입: 박스 하단 4% 이내 롱, 상단 4% 이내 숏. MA 조건 없음.
+
+추세장: MA20 기울기 ±2.5% 초과 시 상승/하락 판단.
+- 상승장 롱: 가격 ≤ MA20 + RSI ≤ 48
+- 상승장 숏: 가격 ≥ MA20 + RSI ≥ 80
+- 하락장 롱: 가격 ≤ MA20 + RSI ≤ 20
+- 하락장 숏: 가격 ≥ MA20 + RSI ≥ 52
+익절: 5.5%, 손절: 2.5%
 """
 
 from typing import Literal, Optional, List, Union, Tuple
@@ -24,16 +31,18 @@ from config_paper import (
     SIDEWAYS_BOX_SLOPE_DIFF_MAX,
     SIDEWAYS_BOX_SLOPE_MAX,
     SIDEWAYS_BOX_EXIT_MARGIN_PCT,
-    TREND_PULLBACK_MA_PCT,
-    TREND_RSI_LONG_MAX,
-    TREND_RSI_SHORT_MIN,
-    TREND_MA50_MA100_FILTER,
+    TREND_SLOPE_BARS,
+    TREND_SLOPE_MIN_PCT,
+    TREND_UPTREND_LONG_RSI_MAX,
+    TREND_UPTREND_SHORT_RSI_MIN,
+    TREND_DOWNTREND_LONG_RSI_MAX,
+    TREND_DOWNTREND_SHORT_RSI_MIN,
 )
 
 Signal = Literal["long", "short", "flat", "hold"]
-MarketRegime = Literal["sideways", "neutral"]
+MarketRegime = Literal["trend", "sideways", "neutral"]
 
-REGIME_KR = {"sideways": "횡보장", "neutral": "추세장"}
+REGIME_KR = {"sideways": "횡보장", "trend": "추세장", "neutral": "중립"}
 BOX_TOUCH_THRESHOLD = 0.012
 
 
@@ -127,7 +136,23 @@ def detect_market_regime(
     ma_100: float = 0.0,
     price_history: Optional[PriceHistory] = None,
     box_period: Optional[int] = None,
+    ma_long_history: Optional[List[float]] = None,
 ) -> MarketRegime:
+    """
+    장세 판별. 순서: 1) 추세(24h 15분봉 MA20 기울기 ±2.5% 초과) 2) 횡보(박스) 3) 중립.
+    """
+    # 1) 추세장 판별: 24시간(96봉) 15분봉 MA20 기울기 ±2.5% 초과
+    if ma_long_history and len(ma_long_history) >= TREND_SLOPE_BARS:
+        # 마지막 TREND_SLOPE_BARS개만 사용 (최근 96개)
+        recent_ma20 = ma_long_history[-TREND_SLOPE_BARS:]
+        ma20_start = recent_ma20[0]
+        ma20_end = recent_ma20[-1]
+        if ma20_start and ma20_start > 0:
+            slope_pct = (ma20_end - ma20_start) / ma20_start * 100.0
+            if abs(slope_pct) >= TREND_SLOPE_MIN_PCT:
+                return "trend"
+
+    # 2) 횡보장 판별: 박스 조건
     if long_ma <= 0 or ma_50 <= 0 or ma_100 <= 0:
         return "neutral"
 
@@ -143,11 +168,12 @@ def detect_market_regime(
         if box_range > 0:
             m = SIDEWAYS_BOX_EXIT_MARGIN_PCT / 100
             if price > box_high * (1 + m) or price < box_low * (1 - m):
-                return "neutral"  # 박스권 이탈 구간: 가격이 다시 박스 안으로 들어올 때까지 추세장
+                return "neutral"  # 박스권 이탈 구간
             pct = box_range / box_low * 100
             if pct >= SIDEWAYS_BOX_RANGE_PCT_MIN and box_range >= SIDEWAYS_BOX_RANGE_MIN and box_low <= price <= box_high:
                 return "sideways"
 
+    # 3) 중립
     return "neutral"
 
 
@@ -200,6 +226,22 @@ def get_sideways_box_bounds(
     return _box_high_low_from_two_points(highs, lows, period)
 
 
+def get_trend_direction(price_history: Optional[PriceHistory]) -> Optional[str]:
+    """
+    추세 방향을 반환. "up" (상승), "down" (하락), 또는 None (데이터 부족).
+    24시간(96봉) 15분봉 종가 기울기 기준.
+    """
+    if not price_history or len(price_history) < TREND_SLOPE_BARS:
+        return None
+    closes = [p[2] if isinstance(p, (list, tuple)) and len(p) >= 3 else p for p in price_history[-TREND_SLOPE_BARS:]]
+    if len(closes) < TREND_SLOPE_BARS or not closes[0] or closes[0] <= 0:
+        return None
+    slope_pct = (closes[-1] - closes[0]) / closes[0] * 100.0
+    if abs(slope_pct) < TREND_SLOPE_MIN_PCT:
+        return None  # 추세장이 아님
+    return "up" if slope_pct > 0 else "down"
+
+
 def swing_strategy_signal(
     rsi_value: float,
     price: float,
@@ -219,35 +261,48 @@ def swing_strategy_signal(
     regime_ma_50: Optional[float] = None,
     regime_ma_100: Optional[float] = None,
     regime_price_history: Optional[PriceHistory] = None,
-    macd_line: Optional[float] = None,
-    macd_signal: Optional[float] = None,
+    regime_ma_long_history: Optional[List[float]] = None,
 ) -> Signal:
-    if regime == "neutral":
+    # 추세장: 기울기로 상승/하락 판단 후 각각 다른 진입 조건
+    if regime == "trend":
         ma_short = regime_short_ma if regime_short_ma is not None else short_ma
         ma_long = regime_long_ma if regime_long_ma is not None else long_ma
         ma_50 = regime_ma_50 if regime_ma_50 is not None else None
-        ma_100 = regime_ma_100 if regime_ma_100 is not None else None
-        if ma_short is None or ma_long is None or ma_long <= 0:
+        if ma_short is None or ma_short <= 0 or ma_long is None or ma_long <= 0:
             return "hold"
-        uptrend = ma_short > ma_long
-        if TREND_MA50_MA100_FILTER and ma_50 is not None and ma_100 is not None:
-            uptrend = uptrend and ma_50 > ma_100
-            downtrend = ma_short < ma_long and ma_50 < ma_100
-        else:
-            downtrend = ma_short < ma_long
-        pullback_pct = TREND_PULLBACK_MA_PCT / 100
+        
+        # MA20 기울기로 상승/하락 판단
+        uptrend = False
+        downtrend = False
+        if regime_ma_long_history and len(regime_ma_long_history) >= TREND_SLOPE_BARS:
+            # 마지막 TREND_SLOPE_BARS개만 사용 (최근 96개)
+            recent_ma20 = regime_ma_long_history[-TREND_SLOPE_BARS:]
+            ma20_start = recent_ma20[0]
+            ma20_end = recent_ma20[-1]
+            if ma20_start and ma20_start > 0:
+                slope_pct = (ma20_end - ma20_start) / ma20_start * 100.0
+                uptrend = slope_pct > TREND_SLOPE_MIN_PCT
+                downtrend = slope_pct < -TREND_SLOPE_MIN_PCT
+        
         if not has_position:
             if uptrend:
-                if price <= ma_short * (1 + pullback_pct) and rsi_value <= TREND_RSI_LONG_MAX:
+                # 상승장 롱: RSI ≤ 48 + 가격이 MA20 이하
+                if price <= ma_long and rsi_value <= TREND_UPTREND_LONG_RSI_MAX:
                     return "long"
-            if downtrend:
-                if price >= ma_short * (1 - pullback_pct) and rsi_value >= TREND_RSI_SHORT_MIN:
+                # 상승장 숏: RSI ≥ 80 + 가격이 MA20 이상
+                if price >= ma_long and rsi_value >= TREND_UPTREND_SHORT_RSI_MIN:
                     return "short"
-        else:
-            if is_long and downtrend:
-                return "flat"
-            if not is_long and uptrend:
-                return "flat"
+            elif downtrend:
+                # 하락장 롱: RSI ≤ 20 + 가격이 MA20 이하
+                if price <= ma_long and rsi_value <= TREND_DOWNTREND_LONG_RSI_MAX:
+                    return "long"
+                # 하락장 숏: RSI ≥ 52 + 가격이 MA20 이상
+                if price >= ma_long and rsi_value >= TREND_DOWNTREND_SHORT_RSI_MIN:
+                    return "short"
+        return "hold"
+
+    # 중립: 진입 안 함
+    if regime == "neutral":
         return "hold"
 
     ma_short = regime_short_ma if regime_short_ma is not None else short_ma
@@ -297,33 +352,53 @@ def get_hold_reason(
     regime_price_history: Optional[PriceHistory] = None,
     price_history: Optional[PriceHistory] = None,
 ) -> str:
-    if regime == "neutral":
+    if regime == "trend":
         ma_short = regime_short_ma if regime_short_ma is not None else short_ma
         ma_long = regime_long_ma if regime_long_ma is not None else long_ma
-        ma_50 = regime_ma_50
-        ma_100 = regime_ma_100
-        if ma_short is None or ma_long is None or ma_long <= 0:
-            return "15분봉 MA 데이터 부족"
-        uptrend = ma_short > ma_long
-        if TREND_MA50_MA100_FILTER and ma_50 is not None and ma_100 is not None:
-            uptrend = uptrend and ma_50 > ma_100
-            downtrend = ma_short < ma_long and ma_50 < ma_100
-        else:
-            downtrend = ma_short < ma_long
-        pullback_pct = TREND_PULLBACK_MA_PCT / 100
+        ma_50 = regime_ma_50 if regime_ma_50 is not None else None
+        if ma_short is None or ma_short <= 0 or ma_long is None or ma_long <= 0:
+            return "15분봉 MA7/MA20 데이터 부족"
+        
+        # MA20 기울기로 상승/하락 판단
+        uptrend = False
+        downtrend = False
+        if regime_ma_long_history and len(regime_ma_long_history) >= TREND_SLOPE_BARS:
+            recent_ma20 = regime_ma_long_history[-TREND_SLOPE_BARS:]
+            ma20_start = recent_ma20[0]
+            ma20_end = recent_ma20[-1]
+            if ma20_start and ma20_start > 0:
+                slope_pct = (ma20_end - ma20_start) / ma20_start * 100.0
+                uptrend = slope_pct > TREND_SLOPE_MIN_PCT
+                downtrend = slope_pct < -TREND_SLOPE_MIN_PCT
+        
         if uptrend:
-            if price > ma_short * (1 + pullback_pct):
-                return f"상승추세 but 가격이 MA7 풀백 구간 아님 (가격 {price:.2f} > MA7×1.01)"
-            if rsi_value > TREND_RSI_LONG_MAX:
-                return f"상승추세 but RSI 과매수 (RSI {rsi_value:.0f} > {TREND_RSI_LONG_MAX})"
-            return "상승추세 but 풀백·RSI 조건 미충족"
-        if downtrend:
-            if price < ma_short * (1 - pullback_pct):
-                return f"하락추세 but 가격이 MA7 풀백 구간 아님 (가격 {price:.2f} < MA7×0.99)"
-            if rsi_value < TREND_RSI_SHORT_MIN:
-                return f"하락추세 but RSI 과매도 (RSI {rsi_value:.0f} < {TREND_RSI_SHORT_MIN})"
-            return "하락추세 but 풀백·RSI 조건 미충족"
-        return "상승·하락 추세 아님 (MA7/MA20 또는 MA50/MA100 조건 미충족)"
+            # 상승장 롱 조건 체크: 가격이 MA20 이하
+            if price > ma_long:
+                return f"상승장 롱: 가격이 MA20 초과 (가격 {price:.2f} > MA20 {ma_long:.2f})"
+            if rsi_value > TREND_UPTREND_LONG_RSI_MAX:
+                return f"상승장 롱: RSI 과매수 (RSI {rsi_value:.0f} > {TREND_UPTREND_LONG_RSI_MAX})"
+            # 상승장 숏 조건 체크: 가격이 MA20 이상
+            if price < ma_long:
+                return f"상승장 숏: 가격이 MA20 미만 (가격 {price:.2f} < MA20 {ma_long:.2f})"
+            if rsi_value < TREND_UPTREND_SHORT_RSI_MIN:
+                return f"상승장 숏: RSI 과매도 (RSI {rsi_value:.0f} < {TREND_UPTREND_SHORT_RSI_MIN})"
+            return "상승장: 가격·RSI 조건 미충족"
+        elif downtrend:
+            # 하락장 롱 조건 체크: 가격이 MA20 이하
+            if price > ma_long:
+                return f"하락장 롱: 가격이 MA20 초과 (가격 {price:.2f} > MA20 {ma_long:.2f})"
+            if rsi_value > TREND_DOWNTREND_LONG_RSI_MAX:
+                return f"하락장 롱: RSI 과매수 (RSI {rsi_value:.0f} > {TREND_DOWNTREND_LONG_RSI_MAX})"
+            # 하락장 숏 조건 체크: 가격이 MA20 이상
+            if price < ma_long:
+                return f"하락장 숏: 가격이 MA20 미만 (가격 {price:.2f} < MA20 {ma_long:.2f})"
+            if rsi_value < TREND_DOWNTREND_SHORT_RSI_MIN:
+                return f"하락장 숏: RSI 과매도 (RSI {rsi_value:.0f} < {TREND_DOWNTREND_SHORT_RSI_MIN})"
+            return "하락장: 가격·RSI 조건 미충족"
+        return "MA20 기울기 데이터 부족 또는 추세 방향 불명확"
+
+    if regime == "neutral":
+        return "중립 (추세·횡보 아님, 진입 없음)"
 
     ph = regime_price_history if regime_price_history else price_history
     if not ph or len(ph) < (REGIME_LOOKBACK_15M if regime_price_history else SIDEWAYS_BOX_PERIOD):
@@ -352,13 +427,40 @@ def get_entry_reason(
     regime_ma_50: Optional[float] = None,
     regime_ma_100: Optional[float] = None,
     regime_price_history: Optional[PriceHistory] = None,
+    regime_ma_long_history: Optional[List[float]] = None,
     price_history: Optional[PriceHistory] = None,
 ) -> str:
-    if regime == "neutral":
+    if regime == "trend":
         ma_short = regime_short_ma if regime_short_ma is not None else short_ma
-        if side == "LONG":
-            return f"상승추세 + MA7 풀백(가격 {price:.2f} ≤ MA7×1.01) + RSI {rsi_value:.0f}(≤{TREND_RSI_LONG_MAX})"
-        return f"하락추세 + MA7 풀백(가격 {price:.2f} ≥ MA7×0.99) + RSI {rsi_value:.0f}(≥{TREND_RSI_SHORT_MIN})"
+        ma_long = regime_long_ma if regime_long_ma is not None else long_ma
+        ma_50 = regime_ma_50 if regime_ma_50 is not None else None
+        
+        # MA20 기울기로 상승/하락 판단
+        uptrend = False
+        downtrend = False
+        if regime_ma_long_history and len(regime_ma_long_history) >= TREND_SLOPE_BARS:
+            recent_ma20 = regime_ma_long_history[-TREND_SLOPE_BARS:]
+            ma20_start = recent_ma20[0]
+            ma20_end = recent_ma20[-1]
+            if ma20_start and ma20_start > 0:
+                slope_pct = (ma20_end - ma20_start) / ma20_start * 100.0
+                uptrend = slope_pct > TREND_SLOPE_MIN_PCT
+                downtrend = slope_pct < -TREND_SLOPE_MIN_PCT
+        
+        if uptrend:
+            if side == "LONG":
+                return f"상승장 롱: 가격 {price:.2f} ≤ MA20 {ma_long:.2f} + RSI {rsi_value:.0f} ≤ {TREND_UPTREND_LONG_RSI_MAX}"
+            else:
+                return f"상승장 숏: 가격 {price:.2f} ≥ MA20 {ma_long:.2f} + RSI {rsi_value:.0f} ≥ {TREND_UPTREND_SHORT_RSI_MIN}"
+        elif downtrend:
+            if side == "LONG":
+                return f"하락장 롱: 가격 {price:.2f} ≤ MA20 {ma_long:.2f} + RSI {rsi_value:.0f} ≤ {TREND_DOWNTREND_LONG_RSI_MAX}"
+            else:
+                return f"하락장 숏: 가격 {price:.2f} ≥ MA20 {ma_long:.2f} + RSI {rsi_value:.0f} ≥ {TREND_DOWNTREND_SHORT_RSI_MIN}"
+        return f"추세장 {side}: 가격 {price:.2f} + RSI {rsi_value:.0f}"
+
+    if regime == "neutral":
+        return "중립 (진입 없음)"
 
     ph = regime_price_history if regime_price_history else price_history
     if not ph:

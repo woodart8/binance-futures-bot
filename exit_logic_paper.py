@@ -38,7 +38,7 @@ def _check_exit(
     box_low: float,
     regime: str,
 ) -> Optional[str]:
-    is_trend = regime == "neutral"
+    is_trend = regime == "trend"
     sl = TREND_STOP_LOSS if is_trend else SIDEWAYS_STOP_LOSS
     tp = TREND_PROFIT_TARGET if is_trend else SIDEWAYS_PROFIT_TARGET
     sl_price = TREND_STOP_LOSS_PRICE if is_trend else SIDEWAYS_STOP_LOSS_PRICE
@@ -71,7 +71,6 @@ def _check_exit(
 def check_long_exit(
     regime: str,
     pnl_pct: float,
-    rsi: float,
     price: float,
     entry_price: float,
     best_pnl_pct: float,
@@ -84,7 +83,6 @@ def check_long_exit(
 def check_short_exit(
     regime: str,
     pnl_pct: float,
-    rsi: float,
     price: float,
     entry_price: float,
     best_pnl_pct: float,

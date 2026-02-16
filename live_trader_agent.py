@@ -20,15 +20,11 @@ from config import (
     MA_LONGEST_PERIOD,
     REGIME_LOOKBACK_15M,
     SYMBOL,
-    MACD_FAST,
-    MACD_SLOW,
-    MACD_SIGNAL,
     LIVE_CHECK_INTERVAL,
 )
 from exchange_client import get_private_exchange
 from data import fetch_ohlcv
-from indicators import calculate_rsi, calculate_ma, calculate_macd
-from chart_patterns import PATTERN_LOOKBACK
+from indicators import calculate_rsi, calculate_ma
 from logger import log
 
 from trading_logic_live import (
@@ -55,7 +51,7 @@ def main() -> None:
 
     state = init_live_state()
     ohlcv_failure_count = 0
-    limit = max(RSI_PERIOD, MA_LONGEST_PERIOD, REGIME_LOOKBACK_15M * 3, PATTERN_LOOKBACK * 3) + 100
+    limit = max(RSI_PERIOD, MA_LONGEST_PERIOD, REGIME_LOOKBACK_15M * 3) + 100
 
     try:
         while True:
@@ -72,7 +68,6 @@ def main() -> None:
                 continue
 
             df["rsi"] = calculate_rsi(df["close"], RSI_PERIOD)
-            macd_line, signal_line, _ = calculate_macd(df["close"], MACD_FAST, MACD_SLOW, MACD_SIGNAL)
             df["macd_line"] = macd_line
             df["macd_signal"] = signal_line
             df["ma_short"] = calculate_ma(df["close"], MA_SHORT_PERIOD)

@@ -14,9 +14,6 @@ from config import (
     MA_MID_PERIOD,
     MA_LONGEST_PERIOD,
     RSI_PERIOD,
-    MACD_FAST,
-    MACD_SLOW,
-    MACD_SIGNAL,
 )
 from indicators import calculate_ma, calculate_rsi, calculate_macd
 from strategy_core import detect_market_regime
@@ -58,7 +55,7 @@ def fetch_ohlcv(exchange, limit: int = 400, symbol: str = SYMBOL, timeframe: str
 
 
 def compute_regime_15m(df: pd.DataFrame, current_price: float) -> tuple:
-    """(regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, macd_line_15m, macd_signal_15m)"""
+    """(regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, ma_long_history)"""
     df_tmp = df.copy()
     df_tmp["timestamp"] = pd.to_datetime(df_tmp["timestamp"])
     df_15m = df_tmp.set_index("timestamp").resample("15min").agg(
@@ -69,12 +66,9 @@ def compute_regime_15m(df: pd.DataFrame, current_price: float) -> tuple:
     df_15m["ma_50"] = calculate_ma(df_15m["close"], MA_MID_PERIOD)
     df_15m["ma_100"] = calculate_ma(df_15m["close"], MA_LONGEST_PERIOD)
     df_15m["rsi"] = calculate_rsi(df_15m["close"], RSI_PERIOD)
-    macd_ln, macd_sig, _ = calculate_macd(df_15m["close"], MACD_FAST, MACD_SLOW, MACD_SIGNAL)
-    df_15m["macd_line"] = macd_ln
-    df_15m["macd_signal"] = macd_sig
     df_15m = df_15m.dropna().reset_index()
     if len(df_15m) < REGIME_LOOKBACK_15M:
-        return ("neutral", 0.0, 0.0, 0.0, 0.0, [], None, None, None)
+        return ("neutral", 0.0, 0.0, 0.0, 0.0, [], None, None, None, [])
     last = df_15m.iloc[-1]
     tail = df_15m.tail(REGIME_LOOKBACK_15M)
     price_history_15m = list(zip(
@@ -89,12 +83,15 @@ def compute_regime_15m(df: pd.DataFrame, current_price: float) -> tuple:
     rsi_15m = float(last["rsi"])
     macd_line_15m = float(last["macd_line"])
     macd_signal_15m = float(last["macd_signal"])
+    # MA20 히스토리 (추세장 판단용)
+    ma_long_history = df_15m["ma_long"].dropna().tolist()
     regime = detect_market_regime(
         short_ma_15m, long_ma_15m, current_price,
         ma_50_15m, ma_100_15m,
         price_history_15m, box_period=REGIME_LOOKBACK_15M,
+        ma_long_history=ma_long_history,
     )
-    return (regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, macd_line_15m, macd_signal_15m)
+    return (regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, ma_long_history)
 
 
 def fetch_ohlcv_history(exchange, days: int = 365, batch_size: int = 1500) -> pd.DataFrame:

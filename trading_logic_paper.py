@@ -27,7 +27,6 @@ from config import (
     TIMEFRAME,
 )
 from data import compute_regime_15m
-from chart_patterns import detect_chart_pattern, PATTERN_LOOKBACK
 from strategy_core import REGIME_KR, swing_strategy_signal, get_hold_reason, get_entry_reason, get_sideways_box_bounds
 from exit_logic import check_long_exit, check_short_exit, reason_to_display_message
 from trade_logger import log_trade, log_funding
@@ -161,9 +160,6 @@ class PaperState:
     position_entry_time: float
     box_high: float
     box_low: float
-    pattern_type: str
-    pattern_target: float
-    pattern_stop: float
     daily_start_balance: float
     daily_start_date: str
     consecutive_loss_count: int
@@ -189,9 +185,6 @@ def init_state() -> PaperState:
         position_entry_time=0.0,
         box_high=0.0,
         box_low=0.0,
-        pattern_type="",
-        pattern_target=0.0,
-        pattern_stop=0.0,
         daily_start_balance=balance,
         daily_start_date="",
         consecutive_loss_count=0,
@@ -226,9 +219,6 @@ def close_position(state: PaperState, candle: pd.Series, side: str, reason: str)
     state.entry_price = 0.0
     state.highest_price = 0.0
     state.lowest_price = float("inf")
-    state.pattern_type = ""
-    state.pattern_target = 0.0
-    state.pattern_stop = 0.0
     state.trailing_stop_active = False
     state.best_pnl_pct = 0.0
     state.entry_regime = ""
@@ -264,9 +254,6 @@ def open_position(
     regime: str = "",
     price_history: Optional[list] = None,
     price_history_15m: Optional[list] = None,
-    pattern_type: str = "",
-    pattern_target: float = 0.0,
-    pattern_stop: float = 0.0,
 ) -> None:
     trade_capital = state.balance * RISK_PER_TRADE
     if trade_capital <= 0:
@@ -297,9 +284,6 @@ def open_position(
     state.entry_regime = regime
     state.box_high = box_high_entry
     state.box_low = box_low_entry
-    state.pattern_type = pattern_type
-    state.pattern_target = pattern_target
-    state.pattern_stop = pattern_stop
 
     if side == "LONG":
         state.highest_price = price
@@ -310,20 +294,17 @@ def open_position(
     box_str = ""
     if regime == "sideways" and state.box_high > 0 and state.box_low > 0:
         box_str = f" | 박스 하단={state.box_low:.2f} 상단={state.box_high:.2f}"
-    if pattern_target > 0 and pattern_stop > 0:
-        log(f"{side} 진입 | {kr} | {reason} | 가격={price:.2f} 잔고={state.balance:.2f} 투입={trade_capital:.2f} | 패턴={pattern_type} 목표가={pattern_target:.2f} 손절가={pattern_stop:.2f}{box_str}")
+    is_trend = regime == "trend"
+    tp_pct = TREND_PROFIT_TARGET if is_trend else SIDEWAYS_PROFIT_TARGET
+    sl_pct = TREND_STOP_LOSS_PRICE if is_trend else SIDEWAYS_STOP_LOSS_PRICE
+    pct_per_leverage = 1.0 / LEVERAGE
+    if side == "LONG":
+        target_price = price * (1 + tp_pct / 100 * pct_per_leverage)
+        stop_price = price * (1 - sl_pct / 100 * pct_per_leverage)
     else:
-        is_trend = regime == "neutral"
-        tp_pct = TREND_PROFIT_TARGET if is_trend else SIDEWAYS_PROFIT_TARGET
-        sl_pct = TREND_STOP_LOSS_PRICE if is_trend else SIDEWAYS_STOP_LOSS_PRICE
-        pct_per_leverage = 1.0 / LEVERAGE
-        if side == "LONG":
-            target_price = price * (1 + tp_pct / 100 * pct_per_leverage)
-            stop_price = price * (1 - sl_pct / 100 * pct_per_leverage)
-        else:
-            target_price = price * (1 - tp_pct / 100 * pct_per_leverage)
-            stop_price = price * (1 + sl_pct / 100 * pct_per_leverage)
-        log(f"{side} 진입 | {kr} | {reason} | 가격={price:.2f} 잔고={state.balance:.2f} 투입={trade_capital:.2f} | 목표가={target_price:.2f} 손절가={stop_price:.2f}{box_str}")
+        target_price = price * (1 - tp_pct / 100 * pct_per_leverage)
+        stop_price = price * (1 + sl_pct / 100 * pct_per_leverage)
+    log(f"{side} 진입 | {kr} | {reason} | 가격={price:.2f} 잔고={state.balance:.2f} 투입={trade_capital:.2f} | 목표가={target_price:.2f} 손절가={stop_price:.2f}{box_str}")
 
 
 def _update_equity_and_drawdown(state: PaperState, price: float) -> None:
@@ -346,20 +327,8 @@ def _reason_no_exit_strategy(regime: str, is_long: bool, rsi: float, price: floa
     return "청산 조건 미충족"
 
 
-def check_scalp_stop_loss_and_profit(state: PaperState, current_price: float, candle: pd.Series) -> bool:
+def check_scalp_stop_loss_and_profit(state: PaperState, current_price: float, candle: pd.Series, df: Optional[pd.DataFrame] = None) -> bool:
     if state.has_long_position:
-        if state.pattern_target > 0 and state.pattern_stop > 0:
-            if current_price >= state.pattern_target:
-                close_position(state, candle, "LONG", f"패턴익절({state.pattern_type})")
-                return True
-            if current_price <= state.pattern_stop:
-                close_position(state, candle, "LONG", f"패턴손절({state.pattern_type})")
-                return True
-            if _should_log_reason():
-                regime_kr = REGIME_KR.get(state.entry_regime or "", state.entry_regime or "?")
-                log(f"[손절/익절청산안함] {regime_kr} | 패턴 익절/손절 대기 중 ({state.pattern_type})")
-            return False
-
         if current_price > state.highest_price:
             state.highest_price = current_price
         pnl_pct = (current_price - state.entry_price) / state.entry_price * LEVERAGE * 100
@@ -371,7 +340,6 @@ def check_scalp_stop_loss_and_profit(state: PaperState, current_price: float, ca
         reason = check_long_exit(
             regime=regime,
             pnl_pct=pnl_pct,
-            rsi=rsi,
             price=current_price,
             entry_price=state.entry_price,
             best_pnl_pct=state.best_pnl_pct,
@@ -384,17 +352,6 @@ def check_scalp_stop_loss_and_profit(state: PaperState, current_price: float, ca
             return True
 
     elif state.has_short_position:
-        if state.pattern_target > 0 and state.pattern_stop > 0:
-            if current_price <= state.pattern_target:
-                close_position(state, candle, "SHORT", f"패턴익절({state.pattern_type})")
-                return True
-            if current_price >= state.pattern_stop:
-                close_position(state, candle, "SHORT", f"패턴손절({state.pattern_type})")
-                return True
-            if _should_log_reason():
-                log(f"[손절/익절청산안함] 패턴 익절/손절 대기 ({state.pattern_type})")
-            return False
-
         if current_price < state.lowest_price:
             state.lowest_price = current_price
         pnl_pct = (state.entry_price - current_price) / state.entry_price * LEVERAGE * 100
@@ -406,7 +363,6 @@ def check_scalp_stop_loss_and_profit(state: PaperState, current_price: float, ca
         reason = check_short_exit(
             regime=regime,
             pnl_pct=pnl_pct,
-            rsi=rsi,
             price=current_price,
             entry_price=state.entry_price,
             best_pnl_pct=state.best_pnl_pct,
@@ -441,9 +397,9 @@ def try_paper_entry(state: PaperState, df: pd.DataFrame, current_price: float) -
     open_curr = float(latest["open"])
 
     if len(df) >= REGIME_LOOKBACK_15M * 3:
-        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, _, _, _ = compute_regime_15m(df, current_price)
+        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, _, ma_long_history = compute_regime_15m(df, current_price)
     else:
-        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m = "neutral", 0.0, 0.0, 0.0, 0.0, []
+        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, ma_long_history = "neutral", 0.0, 0.0, 0.0, 0.0, [], 0.0, []
     if len(df) >= SIDEWAYS_BOX_PERIOD:
         tail = df.tail(SIDEWAYS_BOX_PERIOD + 1)
         price_history = list(zip(tail["high"].tolist(), tail["low"].tolist(), tail["close"].tolist()))
@@ -470,6 +426,7 @@ def try_paper_entry(state: PaperState, df: pd.DataFrame, current_price: float) -
         regime_ma_50=ma_50_15m if use_15m else None,
         regime_ma_100=ma_100_15m if use_15m else None,
         regime_price_history=regime_price_hist,
+        regime_ma_long_history=ma_long_history if use_15m else None,
         macd_line=None,
         macd_signal=None,
     )
@@ -493,23 +450,7 @@ def try_paper_entry(state: PaperState, df: pd.DataFrame, current_price: float) -
     if state.balance * RISK_PER_TRADE < 5.0:
         return False
 
-    pattern_info = None
-    if len(df) >= PATTERN_LOOKBACK * 3:
-        df_tmp = df.copy()
-        df_tmp["timestamp"] = pd.to_datetime(df_tmp["timestamp"])
-        df_15m = df_tmp.set_index("timestamp").resample("15min").agg(
-            {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
-        ).dropna()
-        if len(df_15m) >= PATTERN_LOOKBACK:
-            highs = df_15m["high"].iloc[-PATTERN_LOOKBACK:].tolist()
-            lows = df_15m["low"].iloc[-PATTERN_LOOKBACK:].tolist()
-            closes = df_15m["close"].iloc[-PATTERN_LOOKBACK:].tolist()
-            pattern_info = detect_chart_pattern(highs, lows, closes, current_price)
-
     if signal == "long":
-        pt, ptg, pst = "", 0.0, 0.0
-        if pattern_info and pattern_info.side == "LONG":
-            pt, ptg, pst = pattern_info.name, pattern_info.target_price, pattern_info.stop_price
         reason = get_entry_reason(
             regime, "LONG", rsi, current_price, short_ma, long_ma,
             regime_short_ma=short_ma_15m if use_15m else None,
@@ -517,18 +458,15 @@ def try_paper_entry(state: PaperState, df: pd.DataFrame, current_price: float) -
             regime_ma_50=ma_50_15m if use_15m else None,
             regime_ma_100=ma_100_15m if use_15m else None,
             regime_price_history=regime_price_hist,
+            regime_ma_long_history=ma_long_history if use_15m else None,
             price_history=price_history,
-        ) + (f" + 패턴익절/손절 ({pt})" if pt else "")
+        )
         open_position(
             state, current_price, "LONG", reason.strip(),
             regime, price_history, price_history_15m=price_history_15m if regime == "sideways" else None,
-            pattern_type=pt, pattern_target=ptg, pattern_stop=pst,
         )
         return True
     else:
-        pt, ptg, pst = "", 0.0, 0.0
-        if pattern_info and pattern_info.side == "SHORT":
-            pt, ptg, pst = pattern_info.name, pattern_info.target_price, pattern_info.stop_price
         reason = get_entry_reason(
             regime, "SHORT", rsi, current_price, short_ma, long_ma,
             regime_short_ma=short_ma_15m if use_15m else None,
@@ -536,12 +474,12 @@ def try_paper_entry(state: PaperState, df: pd.DataFrame, current_price: float) -
             regime_ma_50=ma_50_15m if use_15m else None,
             regime_ma_100=ma_100_15m if use_15m else None,
             regime_price_history=regime_price_hist,
+            regime_ma_long_history=ma_long_history if use_15m else None,
             price_history=price_history,
-        ) + (f" + 패턴익절/손절 ({pt})" if pt else "")
+        )
         open_position(
             state, current_price, "SHORT", reason.strip(),
             regime, price_history, price_history_15m=price_history_15m if regime == "sideways" else None,
-            pattern_type=pt, pattern_target=ptg, pattern_stop=pst,
         )
         return True
 
@@ -556,9 +494,9 @@ def apply_strategy_on_candle(
     long_ma = float(candle["ma_long"])
 
     short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m = 0.0, 0.0, 0.0, 0.0, []
-    rsi_15m, macd_line_15m, macd_signal_15m = None, None, None
+    rsi_15m = None
     if regime is None and df is not None and len(df) >= REGIME_LOOKBACK_15M * 3:
-        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, macd_line_15m, macd_signal_15m = compute_regime_15m(df, price)
+        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, ma_long_history = compute_regime_15m(df, price)
     if regime is None:
         regime = "neutral"
 
@@ -596,6 +534,7 @@ def apply_strategy_on_candle(
         regime_ma_50=ma_50_15m if use_15m else None,
         regime_ma_100=ma_100_15m if use_15m else None,
         regime_price_history=regime_price_hist,
+        regime_ma_long_history=ma_long_history if use_15m else None,
         macd_line=None,
         macd_signal=None,
     )
@@ -616,13 +555,10 @@ def apply_strategy_on_candle(
     consecutive_limit_hit = state.consecutive_loss_count >= CONSECUTIVE_LOSS_LIMIT
 
     if signal == "flat" and has_position:
-        if state.pattern_target > 0 and state.pattern_stop > 0:
-            pass
-        else:
-            side = "LONG" if is_long else "SHORT"
-            close_position(state, candle, side, f"단타청산({regime_kr})")
-            _update_equity_and_drawdown(state, price)
-            return True
+        side = "LONG" if is_long else "SHORT"
+        close_position(state, candle, side, f"단타청산({regime_kr})")
+        _update_equity_and_drawdown(state, price)
+        return True
     else:
         if not has_position:
             if daily_limit_hit or consecutive_limit_hit:
@@ -638,6 +574,7 @@ def apply_strategy_on_candle(
                     regime_ma_50=ma_50_15m if use_15m else None,
                     regime_ma_100=ma_100_15m if use_15m else None,
                     regime_price_history=regime_price_hist,
+                    regime_ma_long_history=ma_long_history if use_15m else None,
                     price_history=price_history,
                 )
                 log(f"[진입안함] {regime_kr} | {reason}")

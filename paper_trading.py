@@ -18,9 +18,6 @@ from config import (
     RSI_PERIOD,
     MA_LONGEST_PERIOD,
     REGIME_LOOKBACK_15M,
-    MACD_FAST,
-    MACD_SLOW,
-    MACD_SIGNAL,
     MA_SHORT_PERIOD,
     MA_LONG_PERIOD,
     MA_MID_PERIOD,
@@ -28,8 +25,7 @@ from config import (
 )
 from exchange_client import get_public_exchange
 from data import fetch_ohlcv
-from indicators import calculate_rsi, calculate_ma, calculate_macd
-from chart_patterns import PATTERN_LOOKBACK
+from indicators import calculate_rsi, calculate_ma
 from strategy_core import REGIME_KR
 from logger import log
 
@@ -52,14 +48,13 @@ def main() -> None:
     log(f"시작 잔고={INITIAL_BALANCE:.2f}")
 
     last_candle_time = None
-    limit = max(RSI_PERIOD, MA_LONGEST_PERIOD, REGIME_LOOKBACK_15M * 3, PATTERN_LOOKBACK * 3) + 100
+    limit = max(RSI_PERIOD, MA_LONGEST_PERIOD, REGIME_LOOKBACK_15M * 3) + 100
 
     try:
         while True:
             df = fetch_ohlcv(exchange, limit=limit)
 
             df["rsi"] = calculate_rsi(df["close"], RSI_PERIOD)
-            macd_line, signal_line, _ = calculate_macd(df["close"], MACD_FAST, MACD_SLOW, MACD_SIGNAL)
             df["macd_line"] = macd_line
             df["macd_signal"] = signal_line
             df["ma_short"] = calculate_ma(df["close"], MA_SHORT_PERIOD)
@@ -90,7 +85,7 @@ def main() -> None:
             # 30초 단위: 포지션 보유 시 현재가로 익절/손절 체크 (모의 청산)
             if state.has_long_position or state.has_short_position:
                 candle_for_close = pd.Series({**latest.to_dict(), "close": current_price})
-                if check_scalp_stop_loss_and_profit(state, current_price, candle_for_close):
+                if check_scalp_stop_loss_and_profit(state, current_price, candle_for_close, df):
                     time.sleep(CHECK_INTERVAL)
                     continue
             else:
