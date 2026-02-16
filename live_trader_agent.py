@@ -51,7 +51,10 @@ def main() -> None:
 
     state = init_live_state()
     ohlcv_failure_count = 0
-    limit = max(RSI_PERIOD, MA_LONGEST_PERIOD, REGIME_LOOKBACK_15M * 3) + 100
+    # MA100은 15분봉 기준 100개 필요 = 5분봉 기준 300개
+    # REGIME_LOOKBACK_15M은 15분봉 기준 96개 = 5분봉 기준 288개
+    # 충분한 데이터 확보를 위해 여유분 추가
+    limit = max(MA_LONGEST_PERIOD * 3, REGIME_LOOKBACK_15M * 3) + 100
 
     try:
         while True:

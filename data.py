@@ -55,12 +55,21 @@ def fetch_ohlcv(exchange, limit: int = 400, symbol: str = SYMBOL, timeframe: str
 
 
 def compute_regime_15m(df: pd.DataFrame, current_price: float) -> tuple:
-    """(regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, ma_long_history)"""
+    """
+    15분봉 기준 장세 계산.
+    
+    MA100 계산을 위해 충분한 데이터(약 33시간)를 가져온 후, 최근 24시간(96개 15분봉)만 사용.
+    
+    Returns:
+        (regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, ma_long_history)
+    """
     df_tmp = df.copy()
     df_tmp["timestamp"] = pd.to_datetime(df_tmp["timestamp"])
     df_15m = df_tmp.set_index("timestamp").resample("15min").agg(
         {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
     ).dropna()
+    # MA100 계산을 위해 충분한 데이터 확보 (최소 100개 + 여유분)
+    # 그 중 최근 24시간(REGIME_LOOKBACK_15M)만 사용
     df_15m["ma_short"] = calculate_ma(df_15m["close"], MA_SHORT_PERIOD)
     df_15m["ma_long"] = calculate_ma(df_15m["close"], MA_LONG_PERIOD)
     df_15m["ma_50"] = calculate_ma(df_15m["close"], MA_MID_PERIOD)
@@ -69,19 +78,23 @@ def compute_regime_15m(df: pd.DataFrame, current_price: float) -> tuple:
     df_15m = df_15m.dropna().reset_index()
     if len(df_15m) < REGIME_LOOKBACK_15M:
         return ("neutral", 0.0, 0.0, 0.0, 0.0, [], None, [])
-    last = df_15m.iloc[-1]
-    tail = df_15m.tail(REGIME_LOOKBACK_15M)
+    # 최근 24시간(REGIME_LOOKBACK_15M)만 사용
+    # 하지만 MA100 계산은 전체 데이터에서 수행 (충분한 데이터 확보)
+    df_15m_recent = df_15m.tail(REGIME_LOOKBACK_15M).copy()
+    last = df_15m_recent.iloc[-1]
+    tail = df_15m_recent.tail(REGIME_LOOKBACK_15M)
     price_history_15m = list(zip(
         tail["high"].tolist(),
         tail["low"].tolist(),
         tail["close"].tolist(),
     ))
-    short_ma_15m = float(last["ma_short"])
-    long_ma_15m = float(last["ma_long"])
-    ma_50_15m = float(last["ma_50"])
-    ma_100_15m = float(last["ma_100"])
-    rsi_15m = float(last["rsi"])
-    # MA20 히스토리 (추세장 판단용)
+    # MA 값은 전체 데이터에서 계산된 값을 사용 (MA100이 정상 계산되도록)
+    short_ma_15m = float(df_15m.iloc[-1]["ma_short"])
+    long_ma_15m = float(df_15m.iloc[-1]["ma_long"])
+    ma_50_15m = float(df_15m.iloc[-1]["ma_50"])
+    ma_100_15m = float(df_15m.iloc[-1]["ma_100"])
+    rsi_15m = float(df_15m.iloc[-1]["rsi"])
+    # MA20 히스토리 (추세장 판단용) - 전체 데이터에서 계산하되 최근 96개만 사용
     ma_long_history = df_15m["ma_long"].dropna().tolist()
     regime = detect_market_regime(
         short_ma_15m, long_ma_15m, current_price,

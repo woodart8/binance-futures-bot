@@ -95,4 +95,4 @@
 - **backtest.py** / **analyze_backtest.py** — 백테스트 및 장별 분석 (펀딩 옵션: `exchange` 인자)  
 - **trade_logger.py** — 매매 기록 `trades_log.csv`, 펀딩 기록 `funding_log.csv` (meta 필드는 JSON 형식)  
 - **daily_report.py** — 일일 매매 결과 리포트 이메일 전송 (`trades_log.csv` 기반, 전날 거래 내역 요약)  
-- **data.py** — OHLCV 데이터 수집 및 장세 계산  
+- **data.py** — OHLCV 데이터 수집 및 장세 계산 (MA100 계산을 위해 충분한 데이터 확보 후 최근 24시간만 사용)  
