@@ -22,11 +22,14 @@ from config import (
     MA_LONG_PERIOD,
     MA_MID_PERIOD,
     SYMBOL,
+    TREND_SLOPE_BARS,
+    TREND_SLOPE_MIN_PCT,
+    SIDEWAYS_BOX_EXIT_MARGIN_PCT,
 )
 from exchange_client import get_public_exchange
-from data import fetch_ohlcv
+from data import fetch_ohlcv, compute_regime_15m
 from indicators import calculate_rsi, calculate_ma
-from strategy_core import REGIME_KR
+from strategy_core import REGIME_KR, get_sideways_box_bounds
 from logger import log
 
 from trading_logic_paper import (
@@ -111,6 +114,60 @@ def main() -> None:
                     time.sleep(CHECK_INTERVAL)
                     continue
 
+                # 현재 장세 판단 및 상세 정보 계산
+                regime_detail = ""
+                if len(df) >= REGIME_LOOKBACK_15M * 3:
+                    regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, ma_long_history = compute_regime_15m(df, price)
+                    
+                    if regime == "trend":
+                        # 추세장: MA20 기울기 정보
+                        if ma_long_history and len(ma_long_history) >= TREND_SLOPE_BARS:
+                            recent_ma20 = ma_long_history[-TREND_SLOPE_BARS:]
+                            ma20_start = recent_ma20[0]
+                            ma20_end = recent_ma20[-1]
+                            if ma20_start and ma20_start > 0:
+                                slope_pct = (ma20_end - ma20_start) / ma20_start * 100.0
+                                trend_dir = "상승" if slope_pct > 0 else "하락"
+                                regime_detail = f" | 추세장({trend_dir}): MA20 기울기 {slope_pct:+.2f}% (기준 ±{TREND_SLOPE_MIN_PCT}%)"
+                    elif regime == "sideways":
+                        # 횡보장: 박스 정보
+                        bounds = get_sideways_box_bounds(price_history_15m, REGIME_LOOKBACK_15M)
+                        if bounds:
+                            box_high, box_low = bounds
+                            box_range = box_high - box_low
+                            box_range_pct = box_range / box_low * 100 if box_low > 0 else 0
+                            price_pos = (price - box_low) / box_range * 100 if box_range > 0 else 0
+                            regime_detail = f" | 횡보장: 박스 하단={box_low:.2f} 상단={box_high:.2f} 폭={box_range_pct:.2f}% 가격위치={price_pos:.1f}%"
+                    elif regime == "neutral":
+                        # 중립: 이유 파악
+                        reasons = []
+                        if not ma_long_history or len(ma_long_history) < TREND_SLOPE_BARS:
+                            reasons.append("MA20 데이터 부족")
+                        elif ma_long_history and len(ma_long_history) >= TREND_SLOPE_BARS:
+                            recent_ma20 = ma_long_history[-TREND_SLOPE_BARS:]
+                            ma20_start = recent_ma20[0]
+                            ma20_end = recent_ma20[-1]
+                            if ma20_start and ma20_start > 0:
+                                slope_pct = (ma20_end - ma20_start) / ma20_start * 100.0
+                                if abs(slope_pct) < TREND_SLOPE_MIN_PCT:
+                                    reasons.append(f"MA20 기울기 {slope_pct:+.2f}% (기준 ±{TREND_SLOPE_MIN_PCT}% 미만)")
+                        if long_ma <= 0 or ma_50 <= 0 or ma_100 <= 0:
+                            reasons.append("MA 데이터 부족")
+                        elif not price_history_15m or len(price_history_15m) < REGIME_LOOKBACK_15M:
+                            reasons.append("가격 데이터 부족")
+                        else:
+                            bounds = get_sideways_box_bounds(price_history_15m, REGIME_LOOKBACK_15M)
+                            if not bounds:
+                                reasons.append("박스 조건 미충족")
+                            else:
+                                box_high, box_low = bounds
+                                m = SIDEWAYS_BOX_EXIT_MARGIN_PCT / 100
+                                if price > box_high * (1 + m) or price < box_low * (1 - m):
+                                    reasons.append(f"박스 이탈 (가격 {price:.2f} vs 박스 {box_low:.2f}~{box_high:.2f})")
+                        regime_detail = f" | 중립: {', '.join(reasons) if reasons else '조건 미충족'}"
+                else:
+                    regime_detail = " | 중립: 데이터 부족"
+
                 pos_status = (
                     "LONG" if state.has_long_position
                     else ("SHORT" if state.has_short_position else "NONE")
@@ -127,7 +184,7 @@ def main() -> None:
                 if state.entry_regime == "sideways" and state.box_high > 0 and state.box_low > 0:
                     box_str = f" | 박스 하단={state.box_low:.2f} 상단={state.box_high:.2f}"
                 rsi = float(latest["rsi"])
-                log(f"[5m] {pos_status}{regime_str}{box_str} 가격={price:.2f} RSI={rsi:.0f} 잔고={state.balance:.2f} PNL={total_pnl:+.2f}{extra}")
+                log(f"[5m] {pos_status}{regime_str}{box_str}{regime_detail} 가격={price:.2f} RSI={rsi:.0f} 잔고={state.balance:.2f} PNL={total_pnl:+.2f}{extra}")
 
             time.sleep(CHECK_INTERVAL)
 
