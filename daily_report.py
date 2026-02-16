@@ -45,10 +45,12 @@ def _to_kst(dt_utc: datetime) -> datetime:
 
 
 def get_previous_day_trades() -> list[dict]:
-    """전날(한국시간 기준) 거래 내역 조회"""
+    """전날(한국시간 기준) 거래 내역 조회. CSV가 시간 순이면 전날 구간 지나면 읽기 중단해서 대량 기록 시에도 빠르게 동작."""
     if not LOG_FILE.exists():
         return []
 
+    today_kst = datetime.now(KST).date()
+    yesterday = today_kst - timedelta(days=1)
     rows = []
     with LOG_FILE.open("r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -58,8 +60,8 @@ def get_previous_day_trades() -> list[dict]:
             except (ValueError, KeyError):
                 continue
             ts_kst = _to_kst(ts)
-            today_kst = datetime.now(KST).date()
-            yesterday = today_kst - timedelta(days=1)
+            if ts_kst.date() > yesterday:
+                break  # 시간 순이므로 이후 행은 모두 오늘 이후 → 조기 종료
             if ts_kst.date() == yesterday:
                 row["time_kst"] = ts_kst
                 row["meta_dict"] = _parse_meta(row.get("meta", "{}"))
