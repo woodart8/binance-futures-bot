@@ -601,56 +601,7 @@ def log_5m_status(exchange, state: Dict[str, Any], df: pd.DataFrame) -> None:
                 price_pos = (price - box_low) / box_range * 100 if box_range > 0 else 0
                 regime_detail = f" | 횡보장: 박스 하단={box_low:.2f} 상단={box_high:.2f} 폭={box_range_pct:.2f}% 가격위치={price_pos:.1f}%"
         elif regime == "neutral":
-            # 중립: 이유 파악 (수치 포함)
-            reasons = []
-            # 1) 추세장 조건 체크
-            if not ma_long_history or len(ma_long_history) < TREND_SLOPE_BARS:
-                reasons.append(f"MA20 데이터 부족 ({len(ma_long_history) if ma_long_history else 0}/{TREND_SLOPE_BARS}개)")
-            elif ma_long_history and len(ma_long_history) >= TREND_SLOPE_BARS:
-                recent_ma20 = ma_long_history[-TREND_SLOPE_BARS:]
-                ma20_start = recent_ma20[0]
-                ma20_end = recent_ma20[-1]
-                if ma20_start and ma20_start > 0:
-                    slope_pct = (ma20_end - ma20_start) / ma20_start * 100.0
-                    if abs(slope_pct) < TREND_SLOPE_MIN_PCT:
-                        reasons.append(f"MA20 기울기 {slope_pct:+.2f}% (기준 ±{TREND_SLOPE_MIN_PCT}% 미만, 시작={ma20_start:.2f} 끝={ma20_end:.2f})")
-            
-            # 2) detect_market_regime의 조건: long_ma <= 0 or ma_50 <= 0 or ma_100 <= 0 체크
-            if long_ma_15m <= 0 or ma_50_15m <= 0 or ma_100_15m <= 0:
-                ma_issues = []
-                if long_ma_15m <= 0:
-                    ma_issues.append(f"MA20={long_ma_15m:.2f} (필요 {MA_LONG_PERIOD}개)")
-                if ma_50_15m <= 0:
-                    ma_issues.append(f"MA50={ma_50_15m:.2f} (필요 {MA_MID_PERIOD}개)")
-                if ma_100_15m <= 0:
-                    ma_issues.append(f"MA100={ma_100_15m:.2f} (필요 {MA_LONGEST_PERIOD}개)")
-                # 현재 데이터 개수 확인 (15분봉 기준)
-                df_15m_len = len(df) // 3 if len(df) >= 3 else 0
-                reasons.append(f"중립 이유: long_ma/ma_50/ma_100 체크 실패 ({', '.join(ma_issues)}, 현재 {df_15m_len}개 15분봉)")
-            elif not price_history_15m or len(price_history_15m) < REGIME_LOOKBACK_15M:
-                reasons.append(f"가격 데이터 부족 ({len(price_history_15m) if price_history_15m else 0}/{REGIME_LOOKBACK_15M}개)")
-            else:
-                bounds = get_sideways_box_bounds(price_history_15m, REGIME_LOOKBACK_15M)
-                if not bounds:
-                    reasons.append("박스 조건 미충족 (간격/기울기/범위 조건 불만족)")
-                else:
-                    box_high, box_low = bounds
-                    box_range = box_high - box_low
-                    box_range_pct = box_range / box_low * 100 if box_low > 0 else 0
-                    m = SIDEWAYS_BOX_EXIT_MARGIN_PCT / 100
-                    exit_high = box_high * (1 + m)
-                    exit_low = box_low * (1 - m)
-                    if price > exit_high:
-                        reasons.append(f"박스 상단 이탈 (가격={price:.2f} > 이탈선={exit_high:.2f}, 박스={box_low:.2f}~{box_high:.2f}, 폭={box_range_pct:.2f}%)")
-                    elif price < exit_low:
-                        reasons.append(f"박스 하단 이탈 (가격={price:.2f} < 이탈선={exit_low:.2f}, 박스={box_low:.2f}~{box_high:.2f}, 폭={box_range_pct:.2f}%)")
-                    elif box_range_pct < SIDEWAYS_BOX_RANGE_PCT_MIN:
-                        reasons.append(f"박스 폭 부족 (폭={box_range_pct:.2f}% 기준 {SIDEWAYS_BOX_RANGE_PCT_MIN}%, 박스={box_low:.2f}~{box_high:.2f})")
-                    elif box_range < SIDEWAYS_BOX_RANGE_MIN:
-                        reasons.append(f"박스 범위 부족 (범위={box_range:.2f} 기준 {SIDEWAYS_BOX_RANGE_MIN}, 박스={box_low:.2f}~{box_high:.2f})")
-                    elif not (box_low <= price <= box_high):
-                        reasons.append(f"가격 박스 외부 (가격={price:.2f} 박스={box_low:.2f}~{box_high:.2f}, 폭={box_range_pct:.2f}%)")
-            regime_detail = f" | 중립: {', '.join(reasons) if reasons else '조건 미충족'}"
+            regime_detail = " | 중립"
     else:
         regime_detail = " | 중립: 데이터 부족"
     

@@ -399,6 +399,60 @@ def get_hold_reason(
         return "MA20 기울기 데이터 부족 또는 추세 방향 불명확"
 
     if regime == "neutral":
+        # 중립 이유 상세 분석
+        reasons = []
+        
+        # 1) 추세장 조건 체크
+        if not regime_ma_long_history or len(regime_ma_long_history) < TREND_SLOPE_BARS:
+            reasons.append(f"MA20 데이터 부족 ({len(regime_ma_long_history) if regime_ma_long_history else 0}/{TREND_SLOPE_BARS}개)")
+        elif regime_ma_long_history and len(regime_ma_long_history) >= TREND_SLOPE_BARS:
+            recent_ma20 = regime_ma_long_history[-TREND_SLOPE_BARS:]
+            ma20_start = recent_ma20[0]
+            ma20_end = recent_ma20[-1]
+            if ma20_start and ma20_start > 0:
+                slope_pct = (ma20_end - ma20_start) / ma20_start * 100.0
+                if abs(slope_pct) < TREND_SLOPE_MIN_PCT:
+                    reasons.append(f"MA20 기울기 {slope_pct:+.2f}% (기준 ±{TREND_SLOPE_MIN_PCT}% 미만)")
+        
+        # 2) detect_market_regime의 조건: long_ma <= 0 or ma_50 <= 0 or ma_100 <= 0 체크
+        regime_long_ma_val = regime_long_ma if regime_long_ma is not None else long_ma
+        if regime_long_ma_val <= 0 or (regime_ma_50 is not None and regime_ma_50 <= 0) or (regime_ma_100 is not None and regime_ma_100 <= 0):
+            ma_issues = []
+            if regime_long_ma_val <= 0:
+                ma_issues.append(f"MA20={regime_long_ma_val:.2f}")
+            if regime_ma_50 is not None and regime_ma_50 <= 0:
+                ma_issues.append(f"MA50={regime_ma_50:.2f}")
+            if regime_ma_100 is not None and regime_ma_100 <= 0:
+                ma_issues.append(f"MA100={regime_ma_100:.2f}")
+            if ma_issues:
+                reasons.append(f"long_ma/ma_50/ma_100 체크 실패 ({', '.join(ma_issues)})")
+        elif regime_price_history and len(regime_price_history) >= REGIME_LOOKBACK_15M:
+            # 3) 횡보장 조건 체크
+            bounds = get_sideways_box_bounds(regime_price_history, REGIME_LOOKBACK_15M)
+            if not bounds:
+                reasons.append("박스 조건 미충족")
+            else:
+                box_high, box_low = bounds
+                box_range = box_high - box_low
+                box_range_pct = box_range / box_low * 100 if box_low > 0 else 0
+                m = SIDEWAYS_BOX_EXIT_MARGIN_PCT / 100
+                exit_high = box_high * (1 + m)
+                exit_low = box_low * (1 - m)
+                if price > exit_high:
+                    reasons.append(f"박스 상단 이탈 (가격={price:.2f} > 이탈선={exit_high:.2f})")
+                elif price < exit_low:
+                    reasons.append(f"박스 하단 이탈 (가격={price:.2f} < 이탈선={exit_low:.2f})")
+                elif box_range_pct < SIDEWAYS_BOX_RANGE_PCT_MIN:
+                    reasons.append(f"박스 폭 부족 ({box_range_pct:.2f}% < {SIDEWAYS_BOX_RANGE_PCT_MIN}%)")
+                elif box_range < SIDEWAYS_BOX_RANGE_MIN:
+                    reasons.append(f"박스 범위 부족 ({box_range:.2f} < {SIDEWAYS_BOX_RANGE_MIN})")
+                elif not (box_low <= price <= box_high):
+                    reasons.append(f"가격 박스 외부 (가격={price:.2f})")
+        elif not regime_price_history or len(regime_price_history) < REGIME_LOOKBACK_15M:
+            reasons.append(f"가격 데이터 부족 ({len(regime_price_history) if regime_price_history else 0}/{REGIME_LOOKBACK_15M}개)")
+        
+        if reasons:
+            return f"중립: {', '.join(reasons)}"
         return "중립 (추세·횡보 아님, 진입 없음)"
 
     ph = regime_price_history if regime_price_history else price_history
