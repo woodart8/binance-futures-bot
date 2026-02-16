@@ -404,14 +404,23 @@ def get_hold_reason(
         
         # 1) detect_market_regime의 조건: long_ma <= 0 or ma_50 <= 0 or ma_100 <= 0 체크 (가장 먼저)
         regime_long_ma_val = regime_long_ma if regime_long_ma is not None else long_ma
-        if regime_long_ma_val <= 0 or (regime_ma_50 is not None and regime_ma_50 <= 0) or (regime_ma_100 is not None and regime_ma_100 <= 0):
+        regime_ma_50_val = regime_ma_50 if regime_ma_50 is not None else 0.0
+        regime_ma_100_val = regime_ma_100 if regime_ma_100 is not None else 0.0
+        
+        if regime_long_ma_val <= 0 or regime_ma_50_val <= 0 or regime_ma_100_val <= 0:
             ma_issues = []
             if regime_long_ma_val <= 0:
                 ma_issues.append(f"MA20={regime_long_ma_val:.2f}")
-            if regime_ma_50 is not None and regime_ma_50 <= 0:
-                ma_issues.append(f"MA50={regime_ma_50:.2f}")
-            if regime_ma_100 is not None and regime_ma_100 <= 0:
-                ma_issues.append(f"MA100={regime_ma_100:.2f}")
+            if regime_ma_50_val <= 0:
+                if regime_ma_50 is None:
+                    ma_issues.append("MA50=None")
+                else:
+                    ma_issues.append(f"MA50={regime_ma_50_val:.2f}")
+            if regime_ma_100_val <= 0:
+                if regime_ma_100 is None:
+                    ma_issues.append("MA100=None")
+                else:
+                    ma_issues.append(f"MA100={regime_ma_100_val:.2f}")
             if ma_issues:
                 reasons.append(f"long_ma/ma_50/ma_100 체크 실패 ({', '.join(ma_issues)})")
         # 2) 추세장 조건 체크 (long_ma/ma_50/ma_100이 모두 양수일 때만)
