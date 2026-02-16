@@ -55,8 +55,6 @@ def main() -> None:
             df = fetch_ohlcv(exchange, limit=limit)
 
             df["rsi"] = calculate_rsi(df["close"], RSI_PERIOD)
-            df["macd_line"] = macd_line
-            df["macd_signal"] = signal_line
             df["ma_short"] = calculate_ma(df["close"], MA_SHORT_PERIOD)
             df["ma_long"] = calculate_ma(df["close"], MA_LONG_PERIOD)
             df["ma_50"] = calculate_ma(df["close"], MA_MID_PERIOD)

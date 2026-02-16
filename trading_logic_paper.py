@@ -44,6 +44,30 @@ _daily_limit_logged_date: str = ""
 _last_reason_log_time: float = 0.0
 
 
+@dataclass
+class PaperState:
+    balance: float
+    equity: float
+    has_long_position: bool
+    has_short_position: bool
+    entry_price: float
+    position_size: float
+    peak_equity: float
+    max_drawdown: float
+    highest_price: float
+    lowest_price: float
+    trailing_stop_active: bool
+    best_pnl_pct: float
+    entry_regime: str
+    position_entry_time: float
+    box_high: float
+    box_low: float
+    daily_start_balance: float
+    daily_start_date: str
+    consecutive_loss_count: int
+    last_funding_utc_key: str  # "YYYY-MM-DD-HH" 적용한 마지막 펀딩 시각
+
+
 def _paper_balance_path() -> str:
     fname = getattr(_config, "PAPER_BALANCE_FILE", "paper_balance.json")
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), fname)
@@ -140,30 +164,6 @@ def _should_log_reason() -> bool:
         _last_reason_log_time = time.time()
         return True
     return False
-
-
-@dataclass
-class PaperState:
-    balance: float
-    equity: float
-    has_long_position: bool
-    has_short_position: bool
-    entry_price: float
-    position_size: float
-    peak_equity: float
-    max_drawdown: float
-    highest_price: float
-    lowest_price: float
-    trailing_stop_active: bool
-    best_pnl_pct: float
-    entry_regime: str
-    position_entry_time: float
-    box_high: float
-    box_low: float
-    daily_start_balance: float
-    daily_start_date: str
-    consecutive_loss_count: int
-    last_funding_utc_key: str  # "YYYY-MM-DD-HH" 적용한 마지막 펀딩 시각
 
 
 def init_state() -> PaperState:
@@ -427,8 +427,6 @@ def try_paper_entry(state: PaperState, df: pd.DataFrame, current_price: float) -
         regime_ma_100=ma_100_15m if use_15m else None,
         regime_price_history=regime_price_hist,
         regime_ma_long_history=ma_long_history if use_15m else None,
-        macd_line=None,
-        macd_signal=None,
     )
     if signal not in ("long", "short"):
         return False
@@ -535,8 +533,6 @@ def apply_strategy_on_candle(
         regime_ma_100=ma_100_15m if use_15m else None,
         regime_price_history=regime_price_hist,
         regime_ma_long_history=ma_long_history if use_15m else None,
-        macd_line=None,
-        macd_signal=None,
     )
 
     regime_kr = REGIME_KR.get(regime, regime)

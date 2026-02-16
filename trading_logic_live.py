@@ -250,8 +250,6 @@ def try_live_entry(exchange, state: Dict[str, Any], df: pd.DataFrame, current_pr
         regime_ma_100=ma_100_15m if use_15m else None,
         regime_price_history=regime_price_hist,
         regime_ma_long_history=ma_long_history if use_15m else None,
-        macd_line=None,
-        macd_signal=None,
     )
     if signal not in ("long", "short"):
         return (state, False)
@@ -459,11 +457,11 @@ def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tu
     if has_position and signal == "flat":
         close_reason = "전략청산"
         try:
-                positions = exchange.fetch_positions([SYMBOL])
-            except Exception as e:
-                log(f"포지션 조회 실패: {e}", "ERROR")
-                time.sleep(60)
-                return (state, True, False)
+            positions = exchange.fetch_positions([SYMBOL])
+        except Exception as e:
+            log(f"포지션 조회 실패: {e}", "ERROR")
+            time.sleep(60)
+            return (state, True, False)
 
             contracts = 0.0
             side_to_close = "long" if is_long else "short"
@@ -570,7 +568,7 @@ def log_5m_status(exchange, state: Dict[str, Any], df: pd.DataFrame) -> None:
     if has_position and entry_regime == "sideways" and box_high_entry > 0 and box_low_entry > 0:
         box_str = f" | 박스 하단={box_low_entry:.2f} 상단={box_high_entry:.2f}"
     elif not has_position and len(df) >= REGIME_LOOKBACK_15M * 3:
-        regime, _, _, _, _, price_history_15m, _, _, _ = compute_regime_15m(df, price)
+        regime, _, _, _, _, price_history_15m, _, _ = compute_regime_15m(df, price)
         if regime == "sideways" and price_history_15m and len(price_history_15m) >= REGIME_LOOKBACK_15M:
             bounds = get_sideways_box_bounds(price_history_15m, REGIME_LOOKBACK_15M)
             if bounds:

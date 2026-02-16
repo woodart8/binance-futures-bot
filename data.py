@@ -15,7 +15,7 @@ from config import (
     MA_LONGEST_PERIOD,
     RSI_PERIOD,
 )
-from indicators import calculate_ma, calculate_rsi, calculate_macd
+from indicators import calculate_ma, calculate_rsi
 from strategy_core import detect_market_regime
 
 # 타임아웃/일시 오류 시 재시도 횟수 및 대기(초)
@@ -68,7 +68,7 @@ def compute_regime_15m(df: pd.DataFrame, current_price: float) -> tuple:
     df_15m["rsi"] = calculate_rsi(df_15m["close"], RSI_PERIOD)
     df_15m = df_15m.dropna().reset_index()
     if len(df_15m) < REGIME_LOOKBACK_15M:
-        return ("neutral", 0.0, 0.0, 0.0, 0.0, [], None, None, None, [])
+        return ("neutral", 0.0, 0.0, 0.0, 0.0, [], None, [])
     last = df_15m.iloc[-1]
     tail = df_15m.tail(REGIME_LOOKBACK_15M)
     price_history_15m = list(zip(
@@ -81,8 +81,6 @@ def compute_regime_15m(df: pd.DataFrame, current_price: float) -> tuple:
     ma_50_15m = float(last["ma_50"])
     ma_100_15m = float(last["ma_100"])
     rsi_15m = float(last["rsi"])
-    macd_line_15m = float(last["macd_line"])
-    macd_signal_15m = float(last["macd_signal"])
     # MA20 히스토리 (추세장 판단용)
     ma_long_history = df_15m["ma_long"].dropna().tolist()
     regime = detect_market_regime(
