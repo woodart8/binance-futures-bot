@@ -4,7 +4,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Optional
 
 import pandas as pd
 
@@ -66,7 +66,6 @@ class PaperState:
     daily_start_date: str
     consecutive_loss_count: int
     last_funding_utc_key: str  # "YYYY-MM-DD-HH" 적용한 마지막 펀딩 시각
-    last_stop_loss_candle_time: Any  # 손해 청산 시 해당 5분봉 시각. 다음 5분봉까지 진입 금지
 
 
 def _paper_balance_path() -> str:
@@ -190,7 +189,6 @@ def init_state() -> PaperState:
         daily_start_date="",
         consecutive_loss_count=0,
         last_funding_utc_key=last_funding_utc_key,
-        last_stop_loss_candle_time=None,
     )
 
 
@@ -209,12 +207,6 @@ def close_position(state: PaperState, candle: pd.Series, side: str, reason: str,
     fee = state.balance * RISK_PER_TRADE * FEE_RATE
     net_pnl = gross_pnl - fee - slippage_cost
     state.balance += net_pnl
-
-    # 손해로 청산했으면 다음 5분봉 나올 때까지 진입 금지
-    if net_pnl < 0:
-        ts = candle.get("timestamp")
-        if ts is not None:
-            state.last_stop_loss_candle_time = ts
 
     if net_pnl < 0:
         state.consecutive_loss_count += 1
@@ -396,11 +388,6 @@ def try_paper_entry(state: PaperState, df: pd.DataFrame, current_price: float) -
         return False
 
     latest = df.iloc[-1]
-    # 손해 청산 후에는 다음 5분봉 나올 때까지 진입 금지
-    if state.last_stop_loss_candle_time is not None:
-        latest_ts = latest.get("timestamp")
-        if latest_ts is not None and latest_ts <= state.last_stop_loss_candle_time:
-            return False
     rsi = float(latest["rsi"])
     short_ma = float(latest["ma_short"])
     long_ma = float(latest["ma_long"])

@@ -1,4 +1,8 @@
-"""페이퍼 트레이딩. python paper_trading.py"""
+"""페이퍼 트레이딩. python paper_trading.py
+
+진입·청산은 백테스트와 동일: 새 5분봉이 데이터에 뜬 뒤, 방금 종료된 봉(전봉)의 종가로만 판단.
+같은 봉에서 청산한 경우 해당 봉에서는 재진입하지 않음.
+"""
 
 import sys
 import config_paper
@@ -45,6 +49,7 @@ from trading_logic_paper import (
     apply_funding_if_needed,
 )
 
+# 루프 주기(초). 이 간격마다 OHLCV 조회; 진입·청산 판단은 새 5분봉이 뜰 때만 수행.
 CHECK_INTERVAL = 10
 
 
@@ -85,21 +90,10 @@ def main() -> None:
                 log(f"현재가 조회 실패: {e}", "ERROR")
                 current_price = price
 
-            # 30초 단위: 포지션 보유 시 00/08/16 UTC 펀딩비 적용
+            # 00/08/16 UTC 펀딩비 적용 (포지션 보유 시)
             if state.has_long_position or state.has_short_position:
                 now_utc = datetime.now(timezone.utc)
                 if apply_funding_if_needed(state, exchange, now_utc, current_price):
-                    time.sleep(CHECK_INTERVAL)
-                    continue
-            # 30초 단위: 포지션 보유 시 현재가로 익절/손절 체크 (모의 청산)
-            if state.has_long_position or state.has_short_position:
-                candle_for_close = pd.Series({**latest.to_dict(), "close": current_price})
-                if check_scalp_stop_loss_and_profit(state, current_price, candle_for_close, df):
-                    time.sleep(CHECK_INTERVAL)
-                    continue
-            else:
-                # 30초 단위: 진입 조건 만족 시 현재가로 모의 진입(실제 주문 없음)
-                if try_paper_entry(state, df, current_price):
                     time.sleep(CHECK_INTERVAL)
                     continue
 
@@ -111,18 +105,37 @@ def main() -> None:
                 )
                 total_pnl = state.equity - INITIAL_BALANCE  # 매매+펀딩 포함
                 log(f"시작 포지션={pos_status} 가격={current_price:.2f} 잔고={state.balance:.2f} PNL={total_pnl:+.2f}")
-            elif latest_time > last_candle_time:
-                did_close = apply_strategy_on_candle(state, latest, df)
-                last_candle_time = latest_time
-                # 진입/청산 시에는 해당 로그만 남기고 5분 로그는 생략
-                if did_close:
-                    time.sleep(CHECK_INTERVAL)
-                    continue
+            elif latest_time > last_candle_time and len(df) >= 2:
+                # 백테스트와 동일: 새 봉이 뜬 뒤에는 방금 종료된 봉(전봉)의 종가로 진입·청산 판단
+                df_closed = df.iloc[:-1]  # 진행 중인 봉 제외, 전봉까지
+                bar_closed = df_closed.iloc[-1]  # 방금 종료된 봉
+                price = float(bar_closed["close"])
+                closed_this_candle = False  # 같은 봉에서 청산 시 해당 봉에서는 재진입 안 함 (백테스트와 동일)
+                # 1) 익절/손절/박스이탈 체크 (전봉 종가 기준)
+                if state.has_long_position or state.has_short_position:
+                    if check_scalp_stop_loss_and_profit(state, price, bar_closed, df_closed):
+                        closed_this_candle = True
+                        last_candle_time = latest_time
+                        time.sleep(CHECK_INTERVAL)
+                        continue
+                # 2) 전략 신호 청산(flat) 및 로그 (전봉 기준)
+                if not closed_this_candle:
+                    did_close = apply_strategy_on_candle(state, bar_closed, df_closed)
+                    last_candle_time = latest_time
+                    if did_close:
+                        closed_this_candle = True
+                        time.sleep(CHECK_INTERVAL)
+                        continue
+                # 3) 진입 (전봉 종가 기준) — 같은 봉에서 청산한 경우 이 봉에서는 진입하지 않음
+                if not closed_this_candle and not (state.has_long_position or state.has_short_position):
+                    if try_paper_entry(state, df_closed, price):
+                        time.sleep(CHECK_INTERVAL)
+                        continue
 
-                # 현재 장세 판단 및 상세 정보 계산
+                # 현재 장세 판단 및 상세 정보 계산 (전봉 기준)
                 regime_detail = ""
-                if len(df) >= REGIME_LOOKBACK_15M * 3:
-                    regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, ma_long_history = compute_regime_15m(df, price)
+                if len(df_closed) >= REGIME_LOOKBACK_15M * 3:
+                    regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, ma_long_history = compute_regime_15m(df_closed, price)
                     
                     if regime == "trend":
                         # 추세장: MA20 기울기 정보
@@ -163,7 +176,7 @@ def main() -> None:
                 box_str = ""
                 if state.entry_regime == "sideways" and state.box_high > 0 and state.box_low > 0:
                     box_str = f" | 박스 하단={state.box_low:.2f} 상단={state.box_high:.2f}"
-                rsi = float(latest["rsi"])
+                rsi = float(bar_closed["rsi"])
                 log(f"[5m] {pos_status}{regime_str}{box_str}{regime_detail} 가격={price:.2f} RSI={rsi:.0f} 잔고={state.balance:.2f} PNL={total_pnl:+.2f}{extra}")
 
             time.sleep(CHECK_INTERVAL)

@@ -2,7 +2,7 @@
 
 from config_common import *  # noqa: F401, F403
 
-# 실거래 체크 주기(초): 진입·익절·손절 판단 주기
+# OHLCV 조회 주기(초). 진입·청산 판단은 새 5분봉이 데이터에 뜰 때만 수행.
 LIVE_CHECK_INTERVAL = 10
 
 # 필요 시 실거래 전용으로 override (예: 더 보수적)

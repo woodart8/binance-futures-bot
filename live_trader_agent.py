@@ -1,4 +1,8 @@
-"""실거래 에이전트. .env에 API_KEY, SECRET_KEY 필요."""
+"""실거래 에이전트. .env에 API_KEY, SECRET_KEY 필요.
+
+진입·청산은 백테스트와 동일: 새 5분봉이 데이터에 뜬 뒤, 방금 종료된 봉(전봉)의 종가로만 판단.
+같은 봉에서 청산한 경우 해당 봉에서는 재진입하지 않음.
+"""
 
 import sys
 import config_live
@@ -90,19 +94,6 @@ def main() -> None:
                 log(f"현재가 조회 실패: {e}", "ERROR")
                 current_price = price
 
-            # 30초 단위: 포지션 보유 시 현재가로 익절/손절 체크
-            if state.get("has_position"):
-                state, did_close = check_tp_sl_and_close(exchange, state, current_price, df)
-                if did_close:
-                    time.sleep(LIVE_CHECK_INTERVAL)
-                    continue
-            else:
-                # 30초 단위: 진입 조건 만족 시 현재가로 진입
-                state, did_enter = try_live_entry(exchange, state, df, current_price)
-                if did_enter:
-                    time.sleep(LIVE_CHECK_INTERVAL)
-                    continue
-
             if state["last_candle_time"] is None:
                 state["last_candle_time"] = latest_time
                 try:
@@ -110,14 +101,39 @@ def main() -> None:
                 except Exception:
                     bal = 0.0
                 log(f"[시작] 가격={price:.2f} 잔고={bal:.2f}")
-            elif latest_time > state["last_candle_time"]:
-                state, skip, did_close = process_live_candle(exchange, state, df)
-                if skip:
-                    time.sleep(60)
-                    continue
-                # 진입/청산 시에는 해당 로그만 남기고 5분 로그는 생략
-                if not did_close:
-                    log_5m_status(exchange, state, df)
+            elif latest_time > state["last_candle_time"] and len(df) >= 2:
+                # 백테스트와 동일: 새 봉이 뜬 뒤에는 방금 종료된 봉(전봉)의 종가로 진입·청산 판단
+                df_closed = df.iloc[:-1]  # 진행 중인 봉 제외, 전봉까지
+                bar_closed = df_closed.iloc[-1]  # 방금 종료된 봉
+                close_price = float(bar_closed["close"])
+                closed_this_candle = False  # 같은 봉에서 청산 시 해당 봉에서는 재진입 안 함 (백테스트와 동일)
+                # 1) 익절/손절/박스이탈 체크 (전봉 종가 기준)
+                if state.get("has_position"):
+                    state, did_close = check_tp_sl_and_close(exchange, state, close_price, df_closed)
+                    if did_close:
+                        closed_this_candle = True
+                        state["last_candle_time"] = latest_time
+                        time.sleep(LIVE_CHECK_INTERVAL)
+                        continue
+                # 2) 전략 신호 청산(flat) 및 5분봉 상태 처리 (전봉 기준)
+                if not closed_this_candle:
+                    state, skip, did_close = process_live_candle(exchange, state, df_closed)
+                    state["last_candle_time"] = latest_time
+                    if skip:
+                        time.sleep(60)
+                        continue
+                    if did_close:
+                        closed_this_candle = True
+                        time.sleep(LIVE_CHECK_INTERVAL)
+                        continue
+                # 3) 진입 (전봉 종가 기준) — 같은 봉에서 청산한 경우 이 봉에서는 진입하지 않음
+                if not closed_this_candle and not state.get("has_position"):
+                    state, did_enter = try_live_entry(exchange, state, df_closed, close_price)
+                    if did_enter:
+                        time.sleep(LIVE_CHECK_INTERVAL)
+                        continue
+                # 5분 로그 (전봉 기준)
+                log_5m_status(exchange, state, df_closed)
 
             time.sleep(LIVE_CHECK_INTERVAL)
 
