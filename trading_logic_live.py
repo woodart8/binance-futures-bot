@@ -59,6 +59,7 @@ def init_live_state() -> Dict[str, Any]:
         "daily_start_date": "",
         "consecutive_loss_count": 0,
         "last_candle_time": None,
+        "last_stop_loss_candle_time": None,  # 손해 청산 후 다음 5분봉까지 진입 금지
     }
 
 
@@ -206,6 +207,11 @@ def check_tp_sl_and_close(exchange, state: Dict[str, Any], current_price: float,
         "daily_start_balance": daily_start_balance,
         "daily_start_date": daily_start_date,
     }
+    # 손해로 청산했으면 다음 5분봉 나올 때까지 진입 금지
+    if pnl < 0:
+        ts = latest.get("timestamp")
+        if ts is not None:
+            new_state["last_stop_loss_candle_time"] = ts
     return (new_state, True)
 
 
@@ -219,6 +225,10 @@ def try_live_entry(exchange, state: Dict[str, Any], df: pd.DataFrame, current_pr
 
     latest = df.iloc[-1]
     latest_time = latest["timestamp"]
+    # 손해 청산 후에는 다음 5분봉 나올 때까지 진입 금지
+    last_sl_ts = state.get("last_stop_loss_candle_time")
+    if last_sl_ts is not None and latest_time is not None and latest_time <= last_sl_ts:
+        return (state, False)
     rsi = float(latest["rsi"])
     short_ma = float(latest["ma_short"])
     long_ma = float(latest["ma_long"])
@@ -463,7 +473,7 @@ def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tu
     consecutive_limit_hit = consecutive_loss_count >= CONSECUTIVE_LOSS_LIMIT
 
     if has_position and signal == "flat":
-        close_reason = "전략청산"
+        close_reason = reason_to_display_message(reason, is_long) if reason else "전략청산"
         try:
             positions = exchange.fetch_positions([SYMBOL])
         except Exception as e:
@@ -517,13 +527,13 @@ def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tu
                     "reason": close_reason,
                 },
             )
-            state = {
+            new_state = {
                 **state,
                 "has_position": False,
                 "is_long": False,
                 "entry_price": 0.0,
-        "entry_regime": "",
-        "box_high_entry": 0.0,
+                "entry_regime": "",
+                "box_high_entry": 0.0,
                 "box_low_entry": 0.0,
                 "highest_price": 0.0,
                 "lowest_price": float("inf"),
@@ -534,7 +544,10 @@ def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tu
                 "daily_start_date": daily_start_date,
                 "last_candle_time": latest_time,
             }
-            return (state, False, True)
+            # 손해로 청산했으면 다음 5분봉까지 진입 금지
+            if new_balance - entry_balance < 0:
+                new_state["last_stop_loss_candle_time"] = latest_time
+            return (new_state, False, True)
 
     # 5분 상태 로그용: 갱신된 state 반영 (청산/진입 없을 때도 highest/lowest/best_pnl 등 반영)
     out = {
