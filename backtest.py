@@ -27,6 +27,7 @@ from config import (
     SIDEWAYS_BOX_PERIOD,
     REGIME_LOOKBACK_15M,
     TREND_SLOPE_BARS,
+    TREND_SLOPE_MIN_PCT,
     SYMBOL,
 )
 from indicators import calculate_rsi, calculate_ma
@@ -52,6 +53,7 @@ class TradeDetail:
     exit_rsi: float
     regime: str
     reason: str  # 청산 이유
+    trend_direction: str = ""  # 추세장일 때 "up"(상승) / "down"(하락) / ""
 
 
 @dataclass
@@ -116,7 +118,8 @@ def _close_position(
         entry_rsi=entry_info.get("rsi", rsi),
         exit_rsi=rsi,
         regime=regime,
-        reason=reason
+        reason=reason,
+        trend_direction=entry_info.get("trend_direction", ""),
     ))
     
     return net_pnl, is_win
@@ -401,6 +404,18 @@ def run_backtest(df: pd.DataFrame, exchange=None) -> BacktestResult:
             regime_ma_long_history=ma_long_history if use_15m_trend else None,
         )
         
+        # 진입 시 추세 방향 (추세장일 때만: 상승=up, 하락=down)
+        trend_direction = ""
+        if regime == "trend" and ma_long_history and len(ma_long_history) >= TREND_SLOPE_BARS:
+            recent_ma20 = ma_long_history[-TREND_SLOPE_BARS:]
+            ma20_start, ma20_end = recent_ma20[0], recent_ma20[-1]
+            if ma20_start and ma20_start > 0:
+                slope_pct = (ma20_end - ma20_start) / ma20_start * 100.0
+                if slope_pct > TREND_SLOPE_MIN_PCT:
+                    trend_direction = "up"
+                elif slope_pct < -TREND_SLOPE_MIN_PCT:
+                    trend_direction = "down"
+
         # 진입/청산 처리
         if signal == "long" and not has_position and not daily_limit_hit and not consecutive_limit_hit:
             box_high_entry = 0.0
@@ -427,6 +442,7 @@ def run_backtest(df: pd.DataFrame, exchange=None) -> BacktestResult:
                 "box_high": box_high_entry,
                 "box_low": box_low_entry,
                 "accumulated_partial_pnl": 0.0,
+                "trend_direction": trend_direction,
             }
         elif signal == "short" and not has_position and not daily_limit_hit and not consecutive_limit_hit:
             box_high_entry = 0.0
@@ -453,6 +469,7 @@ def run_backtest(df: pd.DataFrame, exchange=None) -> BacktestResult:
                 "box_high": box_high_entry,
                 "box_low": box_low_entry,
                 "accumulated_partial_pnl": 0.0,
+                "trend_direction": trend_direction,
             }
         elif signal == "flat" and has_position:
             # 전략 신호로 청산
@@ -483,7 +500,8 @@ def run_backtest(df: pd.DataFrame, exchange=None) -> BacktestResult:
                     entry_rsi=entry_info.get("rsi", rsi),
                     exit_rsi=rsi,
                     regime=entry_info.get("regime", regime),
-                    reason="전략 신호"
+                    reason="전략 신호",
+                    trend_direction=entry_info.get("trend_direction", ""),
                 ))
                 has_position = False
                 partial_profit_taken = False

@@ -8,10 +8,10 @@ sys.modules["exit_logic"] = exit_logic_paper
 import strategy_core_paper
 sys.modules["strategy_core"] = strategy_core_paper
 
-from typing import Optional
+from typing import Optional, List
 import pandas as pd
 
-from backtest import run_backtest
+from backtest import run_backtest, BacktestResult, TradeDetail
 from exchange_client import get_public_exchange
 from data import fetch_ohlcv_history
 from strategy_core import REGIME_KR
@@ -96,7 +96,242 @@ def analyze_by_reason(trade_details: list) -> dict:
     return by_reason
 
 
+def _get_entry_ts(td: TradeDetail, df: pd.DataFrame):
+    """거래 진입 시각 (UTC)."""
+    if td.entry_time < 0 or td.entry_time >= len(df):
+        return None
+    ts = df.iloc[td.entry_time].get("timestamp")
+    return pd.to_datetime(ts) if ts is not None else None
 
+
+def _get_exit_ts(td: TradeDetail, df: pd.DataFrame):
+    """거래 청산 시각 (UTC)."""
+    if td.exit_time < 0 or td.exit_time >= len(df):
+        return None
+    ts = df.iloc[td.exit_time].get("timestamp")
+    return pd.to_datetime(ts) if ts is not None else None
+
+
+def _trend_trade_label(td: TradeDetail) -> str:
+    """추세장 거래일 때 '추세매매' 또는 '역추세매매'. 아니면 ''."""
+    if (td.regime or "") != "trend":
+        return ""
+    trend_dir = getattr(td, "trend_direction", "") or ""
+    if trend_dir == "up":
+        return "추세매매" if td.side == "LONG" else "역추세매매"
+    if trend_dir == "down":
+        return "추세매매" if td.side == "SHORT" else "역추세매매"
+    return ""
+
+
+def _trade_situation_str(td: TradeDetail) -> str:
+    """거래를 서술형 상황으로: ex) 횡보장에서 가격이 계속 상승해 숏 손절"""
+    regime_kr = REGIME_KR.get(td.regime or "", td.regime or "중립")
+    side_kr = "롱" if td.side == "LONG" else "숏"
+    price_up = td.exit_price > td.entry_price
+    price_move = "가격이 계속 상승" if price_up else "가격이 계속 하락"
+    raw = (td.reason or "").split("(")[0].strip()
+    if "손절" in raw:
+        outcome = "손절"
+    elif "익절" in raw:
+        outcome = "익절"
+    elif "박스권_상단이탈" in raw or "박스권 상단" in raw:
+        outcome = "박스 상단 이탈"
+    elif "박스권_하단이탈" in raw or "박스권 하단" in raw:
+        outcome = "박스 하단 이탈"
+    elif "스탑로스" in raw:
+        outcome = "스탑로스"
+    else:
+        outcome = raw or "청산"
+    base = f"{regime_kr}에서 {price_move}해 {side_kr} {outcome}"
+    trend_label = _trend_trade_label(td)
+    if trend_label:
+        base += f" ({trend_label})"
+    return base
+
+
+def print_detailed_trade_analysis(result: BacktestResult, df: pd.DataFrame, top_n: int = 10) -> None:
+    """거래 내역 상세 분석: 상황별 서술, 많이 번/잃은 거래, RSI·시간대·청산사유별."""
+    details = result.trade_details
+    if not details:
+        print("\n[상세 거래 분석] 거래 내역 없음.")
+        return
+
+    n = min(top_n, len(details))
+    sorted_by_pnl = sorted(details, key=lambda x: x.pnl, reverse=True)
+
+    print("\n" + "=" * 60)
+    print("[상세 거래 분석] 어떤 상황에서 많이 벌고/잃었는지")
+    print("=" * 60)
+
+    # 상황별 서술형 요약 (ex. 횡보장에서 가격 상승해 숏 손절)
+    situation_pnl: dict = {}
+    for td in details:
+        sit = _trade_situation_str(td)
+        if sit not in situation_pnl:
+            situation_pnl[sit] = {"count": 0, "pnl": 0.0}
+        situation_pnl[sit]["count"] += 1
+        situation_pnl[sit]["pnl"] += td.pnl
+
+    loss_situations = [(s, d) for s, d in situation_pnl.items() if d["pnl"] < 0]
+    profit_situations = [(s, d) for s, d in situation_pnl.items() if d["pnl"] > 0]
+    loss_situations.sort(key=lambda x: x[1]["pnl"])
+    profit_situations.sort(key=lambda x: -x[1]["pnl"])
+
+    print("\n--- 손실이 났던 상황 (많이 잃은 순) ---")
+    for sit, d in loss_situations:
+        print(f"  · {sit}: {d['count']}회, 총손실 {d['pnl']:+.2f} USDT")
+
+    print("\n--- 수익이 났던 상황 (많이 번 순) ---")
+    for sit, d in profit_situations:
+        print(f"  · {sit}: {d['count']}회, 총수익 {d['pnl']:+.2f} USDT")
+
+    # 가장 많이 번 거래 Top N
+    print("\n--- 가장 많이 번 거래 (Top {}) ---".format(n))
+    for i, td in enumerate(sorted_by_pnl[:n], 1):
+        if td.pnl <= 0:
+            break
+        entry_ts = _get_entry_ts(td, df)
+        duration_bars = (td.exit_time - td.entry_time) if td.exit_time >= td.entry_time else 0
+        ts_str = entry_ts.strftime("%Y-%m-%d %H:%M") if entry_ts is not None else "-"
+        regime_kr = REGIME_KR.get(td.regime, td.regime)
+        reason_short = (td.reason or "-").split("(")[0].strip()
+        trend_label = _trend_trade_label(td)
+        trend_str = f" | {trend_label}" if trend_label else ""
+        print(f"  {i}. {td.side} | {regime_kr}{trend_str} | {reason_short} | 진입RSI={td.entry_rsi:.0f} | "
+              f"손익 {td.pnl:+.2f} USDT ({td.pnl_pct:+.2f}%) | 진입 {ts_str} | 보유 {duration_bars}봉")
+
+    # 가장 많이 잃은 거래 Top N
+    print("\n--- 가장 많이 잃은 거래 (Top {}) ---".format(n))
+    for i, td in enumerate(sorted_by_pnl[-n:][::-1], 1):
+        if td.pnl >= 0:
+            break
+        entry_ts = _get_entry_ts(td, df)
+        reason_short = (td.reason or "-").split("(")[0].strip()
+        regime_kr = REGIME_KR.get(td.regime, td.regime)
+        trend_label = _trend_trade_label(td)
+        trend_str = f" | {trend_label}" if trend_label else ""
+        ts_str = entry_ts.strftime("%Y-%m-%d %H:%M") if entry_ts is not None else "-"
+        print(f"  {i}. {td.side} | {regime_kr}{trend_str} | {reason_short} | 진입RSI={td.entry_rsi:.0f} | "
+              f"손익 {td.pnl:+.2f} USDT ({td.pnl_pct:+.2f}%) | 진입 {ts_str}")
+
+    # 추세장 추세매매/역추세매매별 손익
+    trend_details = [td for td in details if (td.regime or "") == "trend"]
+    if trend_details:
+        print("\n--- 추세장 추세매매 vs 역추세매매 ---")
+        for label in ["추세매매", "역추세매매"]:
+            subset = [td for td in trend_details if _trend_trade_label(td) == label]
+            if not subset:
+                continue
+            total = sum(t.pnl for t in subset)
+            wins = sum(1 for t in subset if t.pnl > 0)
+            print(f"  {label}: {len(subset)}회 | 승률 {wins/len(subset)*100:.1f}% | 총손익 {total:+.2f} USDT")
+
+    # 장세별 수익/손실 요약
+    print("\n--- 장세별 손익 요약 ---")
+    regime_pnl = {}
+    for td in details:
+        r = td.regime or "unknown"
+        if r not in regime_pnl:
+            regime_pnl[r] = {"pnl": 0.0, "wins": 0, "losses": 0, "win_sum": 0.0, "loss_sum": 0.0}
+        regime_pnl[r]["pnl"] += td.pnl
+        if td.pnl > 0:
+            regime_pnl[r]["wins"] += 1
+            regime_pnl[r]["win_sum"] += td.pnl
+        else:
+            regime_pnl[r]["losses"] += 1
+            regime_pnl[r]["loss_sum"] += td.pnl
+    for r in ["sideways", "trend", "neutral"]:
+        if r not in regime_pnl:
+            continue
+        d = regime_pnl[r]
+        kr = REGIME_KR.get(r, r)
+        print(f"  {kr}: 총손익 {d['pnl']:+.2f} USDT (수익 {d['wins']}회 합계 {d['win_sum']:+.2f}, 손실 {d['losses']}회 합계 {d['loss_sum']:+.2f})")
+
+    # 청산 사유별 수익/손실 기여
+    print("\n--- 청산 사유별 수익/손실 기여 ---")
+    reason_breakdown = {}
+    for td in details:
+        r = (td.reason or "unknown").split("(")[0].strip()
+        if r not in reason_breakdown:
+            reason_breakdown[r] = {"count": 0, "profit_sum": 0.0, "loss_sum": 0.0}
+        reason_breakdown[r]["count"] += 1
+        if td.pnl > 0:
+            reason_breakdown[r]["profit_sum"] += td.pnl
+        else:
+            reason_breakdown[r]["loss_sum"] += td.pnl
+    for r, d in sorted(reason_breakdown.items(), key=lambda x: -(x[1]["profit_sum"] + x[1]["loss_sum"])):
+        print(f"  {r}: {d['count']}회 | 수익 기여 {d['profit_sum']:+.2f} | 손실 기여 {d['loss_sum']:+.2f} | 순손익 {d['profit_sum']+d['loss_sum']:+.2f}")
+
+    # 진입 RSI 구간별
+    print("\n--- 진입 RSI 구간별 ---")
+    rsi_bands = [(0, 20), (20, 40), (40, 60), (60, 80), (80, 101)]
+    band_names = ["0-20", "20-40", "40-60", "60-80", "80-100"]
+    for (lo, hi), name in zip(rsi_bands, band_names):
+        subset = [td for td in details if lo <= td.entry_rsi < hi]
+        if not subset:
+            continue
+        total = sum(t.pnl for t in subset)
+        wins_count = sum(1 for t in subset if t.pnl > 0)
+        print(f"  RSI {name}: {len(subset)}회 | 승률 {wins_count/len(subset)*100:.1f}% | 총손익 {total:+.2f} USDT")
+
+    # 진입 시간대(UTC)별
+    print("\n--- 진입 시간대(UTC)별 손익 ---")
+    hour_pnl = {}
+    for td in details:
+        entry_ts = _get_entry_ts(td, df)
+        h = entry_ts.hour if entry_ts is not None else -1
+        if h < 0:
+            continue
+        if h not in hour_pnl:
+            hour_pnl[h] = {"pnl": 0.0, "count": 0}
+        hour_pnl[h]["pnl"] += td.pnl
+        hour_pnl[h]["count"] += 1
+    for h in sorted(hour_pnl.keys()):
+        d = hour_pnl[h]
+        print(f"  {h:02d}:00 UTC: {d['count']}회 | 총손익 {d['pnl']:+.2f} USDT")
+    if hour_pnl:
+        by_pnl = sorted(hour_pnl.items(), key=lambda x: x[1]["pnl"], reverse=True)
+        print("  (수익 최대 시간대: {})".format(", ".join(f"{h:02d}:00" for h, _ in by_pnl[:3])))
+        print("  (손실 최대 시간대: {})".format(", ".join(f"{h:02d}:00" for h, _ in by_pnl[-3:][::-1])))
+
+    # 요일별
+    print("\n--- 요일별 손익 ---")
+    weekday_names = ["월", "화", "수", "목", "금", "토", "일"]
+    dow_pnl = {}
+    for td in details:
+        entry_ts = _get_entry_ts(td, df)
+        w = entry_ts.weekday() if entry_ts is not None else -1
+        if w < 0:
+            continue
+        if w not in dow_pnl:
+            dow_pnl[w] = {"pnl": 0.0, "count": 0}
+        dow_pnl[w]["pnl"] += td.pnl
+        dow_pnl[w]["count"] += 1
+    for w in sorted(dow_pnl.keys()):
+        d = dow_pnl[w]
+        print(f"  {weekday_names[w]}요일: {d['count']}회 | 총손익 {d['pnl']:+.2f} USDT")
+
+    # 장세 x 청산사유 조합
+    print("\n--- 장세 x 청산사유 조합별 순손익 (상위/하위) ---")
+    cross = {}
+    for td in details:
+        regime = td.regime or "unknown"
+        reason = (td.reason or "unknown").split("(")[0].strip()
+        key = (regime, reason)
+        if key not in cross:
+            cross[key] = 0.0
+        cross[key] += td.pnl
+    sorted_cross = sorted(cross.items(), key=lambda x: x[1], reverse=True)
+    for key, pnl in sorted_cross[:8]:
+        kr = REGIME_KR.get(key[0], key[0])
+        print(f"  {kr} + {key[1]}: {pnl:+.2f} USDT")
+    print("  --- 손실 큰 조합 ---")
+    for key, pnl in sorted_cross[-5:]:
+        if pnl >= 0:
+            continue
+        kr = REGIME_KR.get(key[0], key[0])
+        print(f"  {kr} + {key[1]}: {pnl:+.2f} USDT")
 
 def run_and_analyze(days: int = 600) -> None:
     print(f"5분봉 {days}일치 데이터 수집 중...")
@@ -155,7 +390,7 @@ def run_and_analyze(days: int = 600) -> None:
         if s["short_count"] > 0:
             print(f"  숏: {s['short_count']}회, 승률 {s['short_win_rate']:.1f}%")
         
-        # 추세장의 경우 익절/손절 구분 표시
+        # 추세장의 경우 익절/손절 + 추세매매/역추세매매 구분 표시
         if regime == "trend" and s['count'] > 0:
             trend_trades = [td for td in result.trade_details if td.regime == "trend"]
             trend_profit_count = sum(1 for td in trend_trades if (td.reason or "") == "추세_익절")
@@ -165,6 +400,17 @@ def run_and_analyze(days: int = 600) -> None:
             if trend_profit_count > 0 or trend_stop_count > 0:
                 print(f"  추세 익절: {trend_profit_count}회, 손익 {trend_profit_pnl:+.2f} USDT")
                 print(f"  추세 손절: {trend_stop_count}회, 손익 {trend_stop_pnl:+.2f} USDT")
+            # 추세매매 vs 역추세매매
+            trend_follow = [td for td in trend_trades if _trend_trade_label(td) == "추세매매"]
+            counter_trend = [td for td in trend_trades if _trend_trade_label(td) == "역추세매매"]
+            if trend_follow:
+                tf_pnl = sum(t.pnl for t in trend_follow)
+                tf_wins = sum(1 for t in trend_follow if t.pnl > 0)
+                print(f"  추세매매: {len(trend_follow)}회, 승률 {tf_wins/len(trend_follow)*100:.1f}%, 손익 {tf_pnl:+.2f} USDT")
+            if counter_trend:
+                ct_pnl = sum(t.pnl for t in counter_trend)
+                ct_wins = sum(1 for t in counter_trend if t.pnl > 0)
+                print(f"  역추세매매: {len(counter_trend)}회, 승률 {ct_wins/len(counter_trend)*100:.1f}%, 손익 {ct_pnl:+.2f} USDT")
 
 
     # 청산 사유별
@@ -178,6 +424,43 @@ def run_and_analyze(days: int = 600) -> None:
     for reason, d in sorted(reason_stats.items(), key=lambda x: -x[1]["count"]):
         wr = (d["wins"] / d["count"] * 100) if d["count"] > 0 else 0
         print(f"  {reason}: {d['count']}회, 승률 {wr:.1f}%, 손익 {d['total_pnl']:+.2f}")
+
+    # 날짜별 잔고 변화
+    _print_daily_balance(result, df)
+
+    # 상세 거래 분석
+    print_detailed_trade_analysis(result, df, top_n=10)
+
+
+def _print_daily_balance(result: BacktestResult, df: pd.DataFrame) -> None:
+    """날짜별 종료 잔고와 일일 손익 출력."""
+    if not result.equity_curve or len(df) == 0:
+        return
+    # 봉별 equity_curve[i] = i번째 봉 종료 시점 equity. 날짜별로 마지막 봉의 equity를 취함.
+    daily_balance: dict = {}
+    n = min(len(result.equity_curve), len(df))
+    for i in range(n):
+        ts = df.iloc[i].get("timestamp")
+        if ts is None:
+            continue
+        d = pd.to_datetime(ts).date()
+        daily_balance[d] = result.equity_curve[i]
+
+    if not daily_balance:
+        return
+    print("\n" + "=" * 60)
+    print("[날짜별 잔고 변화]")
+    print("=" * 60)
+    print(f"  {'날짜':<12} {'잔고(USDT)':>14} {'일일손익':>12}")
+    print("  " + "-" * 40)
+    prev_date = None
+    initial = result.initial_balance
+    for d in sorted(daily_balance.keys()):
+        bal = daily_balance[d]
+        prev_bal = initial if prev_date is None else daily_balance[prev_date]
+        day_pnl = bal - prev_bal
+        print(f"  {d!s:<12} {bal:>14,.2f} {day_pnl:>+12,.2f}")
+        prev_date = d
 
 
 if __name__ == "__main__":
