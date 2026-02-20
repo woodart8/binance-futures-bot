@@ -2,6 +2,7 @@
 
 횡보장: 박스 = 간격 2시간 이상인 고가 2개→상단, 저가 2개→하단. 기울기 0.5% 이내·상하단 비슷. 터치 조건 없음.
 진입: 박스 하단 4% 이내 롱, 상단 4% 이내 숏. MA 조건 없음.
+장세 이탈: 박스는 직전 봉까지로 계산해, 가격이 상·하단 0.5% 돌파 시 neutral(중립) 전환.
 
 추세장: MA20 기울기 ±2.5% 초과 시 상승/하락 판단.
 - 상승장 롱: 가격 ≤ MA20 + RSI ≤ 48
@@ -142,9 +143,14 @@ def detect_market_regime(
 
     period = box_period or SIDEWAYS_BOX_PERIOD
     if price_history and len(price_history) >= period:
-        recent = price_history[-period:]
-        highs, lows, _ = _recent_hlc(recent)
-        pair = _box_high_low_from_two_points(highs, lows, period)
+        # 이탈 판정용 박스는 '직전 봉까지'로 계산 (현재 봉 포함하면 뚫고 나갔을 때 상/하단이 넓어져 추세로 안 바뀜)
+        if len(price_history) >= period + 1:
+            recent_for_box = price_history[-(period + 1) : -1]
+        else:
+            recent_for_box = price_history[-period:]
+        box_len = len(recent_for_box)
+        highs, lows, _ = _recent_hlc(recent_for_box)
+        pair = _box_high_low_from_two_points(highs, lows, box_len)
         if pair is None:
             return "neutral"
         box_high, box_low = pair
@@ -421,9 +427,8 @@ def get_hold_reason(
                 slope_pct = (ma20_end - ma20_start) / ma20_start * 100.0
                 if abs(slope_pct) < TREND_SLOPE_MIN_PCT:
                     reasons.append(f"MA20 기울기 {slope_pct:+.2f}% (기준 ±{TREND_SLOPE_MIN_PCT}% 미만)")
-        # 3) 횡보장 조건 체크
+        # 3) 횡보장 조건 체크 (중립 사유 표시용. 실제 장세 판정은 detect_market_regime에서 직전 봉 기준 박스 사용)
         if regime_price_history and len(regime_price_history) >= REGIME_LOOKBACK_15M:
-            # 3) 횡보장 조건 체크
             bounds = get_sideways_box_bounds(regime_price_history, REGIME_LOOKBACK_15M)
             if not bounds:
                 reasons.append("박스 조건 미충족")

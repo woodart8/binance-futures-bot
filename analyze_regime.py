@@ -73,7 +73,7 @@ def main():
     print(f"  RSI(15m): {rsi_15m:.1f}" if rsi_15m is not None else "  RSI: -")
     print()
     print("[판정 결과]")
-    print(f"  regime = {regime!r}  (sideways=횡보장, neutral=추세장)")
+    print(f"  regime = {regime!r}  (sideways=횡보장, trend=추세장, neutral=중립)")
     if regime == "sideways":
         print("  -> 박스(2점+기울기)·범위·가격 조건 충족하여 횡보장으로 판정됨.")
     else:
@@ -82,7 +82,7 @@ def main():
             reasons.append(f"박스 범위 부족 ({box_range_pct:.2f}% < {SIDEWAYS_BOX_RANGE_PCT_MIN}%)")
         if not price_in_box:
             reasons.append("현재가가 박스 밖")
-        print("  -> 추세장(neutral)으로 판정. 미충족:", ", ".join(reasons) if reasons else "(2점/기울기 조건 등)")
+        print("  -> 중립(neutral)으로 판정. 미충족:", ", ".join(reasons) if reasons else "(2점/기울기 조건 등)")
     print("=" * 60)
 
 if __name__ == "__main__":
