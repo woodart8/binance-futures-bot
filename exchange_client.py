@@ -1,5 +1,5 @@
 """
-바이낸스 선물(USDS-M)용 ccxt 클라이언트 생성 유틸리티.
+바이낸스 USDT-M 선물(USDⓈ-M Futures)용 ccxt 클라이언트 생성 유틸리티.
 
 실거래용(API 키 필요)과 퍼블릭 데이터 조회용(OHLCV/티커만) 두 가지를 제공한다.
 """
@@ -17,7 +17,7 @@ load_dotenv()
 
 def get_private_exchange() -> ccxt.binanceusdm:
     """
-    실거래용 바이낸스 USDS-M 선물 인스턴스 생성.
+    실거래용 바이낸스 USDT-M 선물 인스턴스 생성.
 
     API_KEY, SECRET_KEY 는 .env 에서 읽는다.
     """
@@ -42,7 +42,7 @@ def get_private_exchange() -> ccxt.binanceusdm:
 
 def get_public_exchange() -> ccxt.binanceusdm:
     """
-    퍼블릭 데이터 전용 바이낸스 USDS-M 선물 인스턴스.
+    퍼블릭 데이터 전용 바이낸스 USDT-M 선물 인스턴스.
 
     API 키 없이도 시세/캔들 조회만 사용할 때 쓴다.
     """

@@ -44,10 +44,19 @@ OHLCV_CONSECUTIVE_FAILURE_LIMIT = 30
 
 
 def set_leverage_and_margin(exchange) -> None:
-    # market()은 load_markets() 필요 → 선물 전용 API 키면 스팟 호출로 -2015. 바이낸스 선물 id는 "BTCUSDT" 형식.
+    # set_leverage/set_margin_mode는 심볼 id 필요. 바이낸스 선물 id는 "BTCUSDT" 형식(SYMBOL에서 "/" 제거).
     symbol_id = SYMBOL.replace("/", "")
-    exchange.set_leverage(LEVERAGE, symbol_id)
-    exchange.set_margin_mode("isolated", symbol_id)
+    try:
+        exchange.set_leverage(LEVERAGE, symbol_id)
+        exchange.set_margin_mode("isolated", symbol_id)
+    except Exception as e:
+        err = str(e).lower()
+        if "2015" in err or "invalid api-key" in err or "permissions" in err:
+            log(
+                "레버리지/마진 설정 실패 (-2015). 확인: 1) API 키 권한에 '선물' 체크 2) IP 제한 시 서버 IP 허용 3) 키/시크릿 재확인",
+                "ERROR",
+            )
+        raise
 
 
 def main() -> None:

@@ -374,13 +374,13 @@ def check_scalp_stop_loss_and_profit(state: PaperState, current_price: float, ca
             close_position(state, candle, "SHORT", f"{msg} ({pnl_pct:.2f}%)", raw_reason=reason)
             return True
 
-    # 청산대기 로그는 5m 봉 단위 apply_strategy_on_candle에서만 출력 (중복 방지)
+    # 청산대기 로그는 5분봉 단위 apply_strategy_on_candle에서만 출력 (중복 방지)
     return False
 
 
 def try_paper_entry(state: PaperState, df: pd.DataFrame, current_price: float) -> bool:
     """
-    30초 단위: 현재가 기준으로 진입 조건 만족 시 모의 진입(실제 주문 없음).
+    새 5분봉이 뜬 뒤, 전봉 종가 기준 진입 조건 만족 시 모의 진입(실제 주문 없음).
     실거래와 동일 로직, 주문만 시뮬레이션.
     반환: 진입했으면 True.
     """
@@ -485,7 +485,7 @@ def try_paper_entry(state: PaperState, df: pd.DataFrame, current_price: float) -
 def apply_strategy_on_candle(
     state: PaperState, candle: pd.Series, df: Optional[pd.DataFrame] = None, regime: Optional[str] = None
 ) -> bool:
-    """새 5분봉 시 상태/청산만 처리. 진입은 try_paper_entry(30초 단위)에서만. 반환: 이번에 청산했으면 True."""
+    """새 5분봉 시 상태/청산만 처리. 진입은 try_paper_entry(새 봉 시)에서만. 반환: 이번에 청산했으면 True."""
     price = float(candle["close"])
     rsi = float(candle["rsi"])
     short_ma = float(candle["ma_short"])

@@ -64,7 +64,7 @@ def init_live_state() -> Dict[str, Any]:
 
 def check_tp_sl_and_close(exchange, state: Dict[str, Any], current_price: float, df: pd.DataFrame) -> Tuple[Dict[str, Any], bool]:
     """
-    30초 단위 체크: 현재가 기준으로 익절/손절 조건 만족 시 청산.
+    새 5분봉이 뜬 뒤, 전봉 종가 기준 익절/손절 조건 만족 시 청산.
     반환: (업데이트된 state, did_close).
     """
     if not state.get("has_position"):
@@ -160,7 +160,6 @@ def check_tp_sl_and_close(exchange, state: Dict[str, Any], current_price: float,
             exchange.create_market_buy_order(SYMBOL, contracts, {"reduceOnly": True})
         side_str = "LONG" if is_long else "SHORT"
         regime_kr = REGIME_KR.get(entry_regime, entry_regime)
-        log(f"{side_str} 청산 | {regime_kr} | {close_reason} | 진입={entry_price:.2f} 청산={current_price:.2f} 수익률={pnl_pct:+.2f}%")
     except Exception as e:
         log(f"청산 주문 실패: {e}", "ERROR")
         return (state, False)
@@ -175,6 +174,9 @@ def check_tp_sl_and_close(exchange, state: Dict[str, Any], current_price: float,
     else:
         consecutive_loss_count = 0
     pnl_pct_final = (current_price - entry_price) / entry_price * LEVERAGE * 100 if is_long else (entry_price - current_price) / entry_price * LEVERAGE * 100
+    side_str = "LONG" if is_long else "SHORT"
+    regime_kr = REGIME_KR.get(entry_regime, entry_regime)
+    log(f"{side_str} 청산 | {regime_kr} | {close_reason} | 진입={entry_price:.2f} 청산={current_price:.2f} 수익률={pnl_pct_final:+.2f}% 손익={pnl:+.2f} 잔고={new_balance:.2f}")
     log_trade(
         side="LONG" if is_long else "SHORT",
         entry_price=entry_price,
@@ -184,6 +186,7 @@ def check_tp_sl_and_close(exchange, state: Dict[str, Any], current_price: float,
         meta={
             "timeframe": TIMEFRAME,
             "symbol": SYMBOL,
+            "mode": "live",
             "regime": entry_regime,
             "pnl_pct": round(pnl_pct_final, 2),
             "consecutive_loss": consecutive_loss_count,
@@ -211,7 +214,7 @@ def check_tp_sl_and_close(exchange, state: Dict[str, Any], current_price: float,
 
 def try_live_entry(exchange, state: Dict[str, Any], df: pd.DataFrame, current_price: float) -> Tuple[Dict[str, Any], bool]:
     """
-    30초 단위: 현재가 기준으로 진입 조건 만족 시 현재가에 진입.
+    새 5분봉이 뜬 뒤, 전봉 종가 기준 진입 조건 만족 시 시장가 진입(수량은 전봉 종가 기준).
     반환: (업데이트된 state, did_enter).
     """
     if state.get("has_position"):
@@ -373,9 +376,9 @@ def try_live_entry(exchange, state: Dict[str, Any], df: pd.DataFrame, current_pr
 
 def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tuple[Dict[str, Any], bool, bool]:
     """
-    새 캔들 시점에서 청산/상태 처리. exchange 주문 호출 포함.
+    새 5분봉이 뜬 뒤, 전봉 기준 청산/상태 처리. exchange 주문 호출 포함.
     반환: (업데이트된 state, skip, did_close)
-    skip=True 이면 재시도. did_close=True 이면 해당 턴에 5분 로그 생략.
+    skip=True 이면 60초 대기 후 재조회. did_close=True 이면 해당 턴에 5분 로그 생략.
     """
     latest = df.iloc[-1]
     latest_time = latest["timestamp"]
@@ -484,9 +487,6 @@ def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tu
                         exchange.create_market_sell_order(SYMBOL, contracts, {"reduceOnly": True})
                     else:
                         exchange.create_market_buy_order(SYMBOL, contracts, {"reduceOnly": True})
-                    side_str = "LONG" if is_long else "SHORT"
-                    regime_kr = REGIME_KR.get(entry_regime, entry_regime)
-                    log(f"{side_str} 청산 | {regime_kr} | {close_reason} | 진입={entry_price:.2f} 청산={price:.2f} 수익률={pnl_pct:+.2f}%")
                 except Exception as e:
                     log(f"청산 주문 실패: {e}", "ERROR")
                     return (state, True, False)
@@ -502,6 +502,9 @@ def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tu
             else:
                 consecutive_loss_count = 0
             pnl_pct = (price - entry_price) / entry_price * LEVERAGE * 100 if is_long else (entry_price - price) / entry_price * LEVERAGE * 100
+            side_str = "LONG" if is_long else "SHORT"
+            regime_kr = REGIME_KR.get(entry_regime, entry_regime)
+            log(f"{side_str} 청산 | {regime_kr} | {close_reason} | 진입={entry_price:.2f} 청산={price:.2f} 수익률={pnl_pct:+.2f}% 손익={pnl:+.2f} 잔고={new_balance:.2f}")
             log_trade(
                 side="LONG" if is_long else "SHORT",
                 entry_price=entry_price,
@@ -511,6 +514,7 @@ def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tu
                 meta={
                     "timeframe": TIMEFRAME,
                     "symbol": SYMBOL,
+                    "mode": "live",
                     "regime": entry_regime,
                     "pnl_pct": round(pnl_pct, 2),
                     "consecutive_loss": consecutive_loss_count,
