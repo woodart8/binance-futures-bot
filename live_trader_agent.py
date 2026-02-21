@@ -44,15 +44,14 @@ OHLCV_CONSECUTIVE_FAILURE_LIMIT = 30
 
 
 def set_leverage_and_margin(exchange) -> None:
-    market = exchange.market(SYMBOL)
-    exchange.set_leverage(LEVERAGE, market["id"])
-    exchange.set_margin_mode("isolated", market["id"])
+    # market()은 load_markets() 필요 → 선물 전용 API 키면 스팟 호출로 -2015. 바이낸스 선물 id는 "BTCUSDT" 형식.
+    symbol_id = SYMBOL.replace("/", "")
+    exchange.set_leverage(LEVERAGE, symbol_id)
+    exchange.set_margin_mode("isolated", symbol_id)
 
 
 def main() -> None:
     exchange = get_private_exchange()
-    # load_markets()는 내부에서 스팟 API(sapi) 호출 → 선물 전용 API 키면 -2015 발생. 선물 마켓만 로드.
-    exchange.fetch_markets()
     set_leverage_and_margin(exchange)
 
     state = init_live_state()
