@@ -51,6 +51,7 @@ def set_leverage_and_margin(exchange) -> None:
 
 def main() -> None:
     exchange = get_private_exchange()
+    exchange.load_markets()  # market() 호출 전에 마켓 목록 로드 필요
     set_leverage_and_margin(exchange)
 
     state = init_live_state()
