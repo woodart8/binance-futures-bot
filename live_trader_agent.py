@@ -51,7 +51,8 @@ def set_leverage_and_margin(exchange) -> None:
 
 def main() -> None:
     exchange = get_private_exchange()
-    exchange.load_markets()  # market() 호출 전에 마켓 목록 로드 필요
+    # load_markets()는 내부에서 스팟 API(sapi) 호출 → 선물 전용 API 키면 -2015 발생. 선물 마켓만 로드.
+    exchange.fetch_markets()
     set_leverage_and_margin(exchange)
 
     state = init_live_state()
