@@ -255,14 +255,15 @@ def open_position(
     price_history: Optional[list] = None,
     price_history_15m: Optional[list] = None,
 ) -> None:
-    trade_capital = state.balance * RISK_PER_TRADE
+    trade_capital = state.balance * RISK_PER_TRADE  # 마진(투입 담보)
     if trade_capital <= 0:
         return
 
     fee = trade_capital * FEE_RATE
     slippage_cost = trade_capital * SLIPPAGE_PCT / 100
     trade_capital_after_fee = trade_capital - fee - slippage_cost
-    position_size = trade_capital_after_fee / price
+    # 포지션 규모(노션널) = 마진 × 레버리지 → 수량(BTC) = 노션널 / 가격 (라이브와 동일)
+    position_size = (trade_capital_after_fee * LEVERAGE) / price
 
     box_high_entry = 0.0
     box_low_entry = 0.0

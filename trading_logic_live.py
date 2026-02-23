@@ -291,11 +291,12 @@ def try_live_entry(exchange, state: Dict[str, Any], df: pd.DataFrame, current_pr
             log(f"[진입생략] 연속손실 {consecutive_loss_count}회 당일 중단 | 시그널={signal}")
         return (state, False)
 
-    order_usdt = balance * POSITION_SIZE_PERCENT
+    order_usdt = balance * POSITION_SIZE_PERCENT  # 마진(투입 담보)
     if order_usdt < 5.0:
         return (state, False)
 
-    amount = order_usdt / current_price
+    # 포지션 규모(노션널) = 마진 × 레버리지 → 주문 수량(BTC) = 노션널 / 가격
+    amount = (order_usdt * LEVERAGE) / current_price
 
     try:
         if signal == "long":

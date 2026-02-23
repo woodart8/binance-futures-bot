@@ -8,7 +8,7 @@
 SYMBOL = "BTC/USDT"
 TIMEFRAME = "5m"
 
-# 포지션 (paper/live에서 override 가능)
+# 포지션 (paper/live에서 override 가능). 1회 주문 = 마진(잔고×POSITION_SIZE_PERCENT)×LEVERAGE = 노션널, 수량(BTC)=노션널/가격
 LEVERAGE = 6
 POSITION_SIZE_PERCENT = 0.25
 FEE_RATE = 0.001

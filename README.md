@@ -12,6 +12,12 @@
 - **중립**: 위 조건 미충족 시 진입 안 함.
 - **공통**: 5분봉이 닫힐 때마다 진입·청산 판단, 목표익절·손절·스탑로스로 청산.
 
+### 포지션 크기 (레버리지 반영)
+
+- **마진**: 잔고 × `POSITION_SIZE_PERCENT`(기본 0.25). 1회 진입 시 투입 담보.
+- **포지션 규모(노션널)**: 마진 × `LEVERAGE`(기본 6). 라이브/모의투자 모두 **주문 수량(BTC) = 노션널 / 가격**으로 계산해 거래소 최소 주문(예: 0.002 BTC)을 충족할 수 있음.
+- **설정**: `config_common`: `LEVERAGE`, `POSITION_SIZE_PERCENT`.
+
 ### 페이퍼/라이브와 백테스트 정렬
 
 - **진입·청산 시점**: 백테스트와 동일하게 **닫힌 5분봉의 종가**로만 판단.
@@ -106,7 +112,7 @@
 - **strategy_core_paper.py** / **strategy_core_live.py** — 장세 판별, 진입 신호, 진입/보유 사유 문자열  
 - **exit_logic_paper.py** / **exit_logic_live.py** — 목표익절·손절·스탑로스·박스 이탈(상·하단 0.5% 돌파) 청산  
 - **funding.py** — 펀딩 레이트 조회, 00/08/16 UTC 정산·손익 계산  
-- **config_common.py** / **config_paper.py** / **config_live.py** — 공통·페이퍼·실거래 설정. 추세장 진입(상승장 롱 RSI 40/터닝, 하락장 숏 RSI 62/꺾임), 일일·연속 손실 한도 등은 `config_common`에서 정의하며, `config_live`에서 실거래만 override 가능.  
+- **config_common.py** / **config_paper.py** / **config_live.py** — 공통·페이퍼·실거래 설정. 레버리지·포지션 비율(마진×레버=노션널), 추세장 진입(상승장 롱 RSI 40/터닝, 하락장 숏 RSI 62/꺾임), 일일·연속 손실 한도 등은 `config_common`에서 정의하며, `config_live`에서 실거래만 override 가능.  
 - **backtest.py** / **analyze_backtest.py** — 백테스트 및 장별 분석 (펀딩 옵션: `exchange` 인자)  
 - **trade_logger.py** — 매매 기록 `trades_log.csv`, 펀딩 기록 `funding_log.csv` (meta 필드는 JSON 형식)  
 - **daily_report.py** — 일일 매매 결과 리포트 이메일 전송 (`trades_log.csv` 기반, 전날 거래 내역 요약)  
