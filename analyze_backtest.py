@@ -18,7 +18,7 @@ from strategy_core import REGIME_KR
 
 REGIME_STRATEGY = {
     "sideways": "박스 하단 4% 롱 / 상단 4% 숏 (박스=2시간 간격 고가2/저가2, 기울기 0.5% 이내, MA 조건 없음)",
-    "trend": "추세장 (24h MA20 기울기 ±2.5% 초과, 상승장 롱: 가격≤MA20+RSI≤48, 숏: 가격≥MA20+RSI≥80, 하락장 롱: 가격≤MA20+RSI≤20, 숏: 가격≥MA20+RSI≥52, 익절 5.5% 손절 2.5%)",
+    "trend": "추세장 (24h MA20 기울기 ±2.5% 초과, 상승장 롱: 가격≤MA20+RSI≤40 옵션RSI상승전환, 숏: RSI≥80, 하락장 롱: RSI≤20, 숏: RSI≥62 옵션RSI꺾임, 익절 5.5% 손절 2.5%)",
     "neutral": "중립 (추세·횡보 아님, 진입 없음)",
 }
 

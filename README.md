@@ -48,6 +48,12 @@
 - 청산: 목표 익절, 손절, **박스 이탈**(상·하단 0.5% 돌파 시), 전략 신호(추세 전환).
 - **장세 전환**: 가격이 박스권을 0.5% 돌파하면 **중립**으로 전환(횡보장 진입 없음). MA20 기울기가 ±2.5% 이상이면 1단계에서 이미 **추세장**으로 판별됨.
 
+### 3.3 당일 진입 중단 조건 (공통)
+
+- **일일 손실 한도**: 당일 시작 잔고 대비 손실률이 `DAILY_LOSS_LIMIT_PCT`(기본 5%) 이상이면 그날은 새 진입 안 함.
+- **연속 손실 한도**: 연속 손실이 `CONSECUTIVE_LOSS_LIMIT`(기본 4회) 이상이면 당일 진입 중단.
+- 당일 시작 잔고는 **날짜가 바뀐 뒤 첫 체크 시점의 잔고**로 갱신됨. (`config_common`: `DAILY_LOSS_LIMIT_PCT`, `CONSECUTIVE_LOSS_LIMIT`)
+
 ---
 
 ## 4. 추세장 전략 (Trend)
@@ -62,12 +68,12 @@
 ### 4.2 진입 조건
 
 **상승장:**
-- **롱**: `가격 ≤ MA20` + `RSI ≤ 48`
+- **롱**: `가격 ≤ MA20` + `RSI ≤ 40` (설정값). 옵션으로 **RSI 상승 전환**(전봉 대비 RSI 상승) 시에만 진입해 조정 초반 롱을 줄임. (`config_common`: `TREND_UPTREND_LONG_RSI_MAX`, `TREND_UPTREND_LONG_ENABLED`, `TREND_UPTREND_LONG_REQUIRE_RSI_TURNUP`)
 - **숏**: `가격 ≥ MA20` + `RSI ≥ 80`
 
 **하락장:**
 - **롱**: `가격 ≤ MA20` + `RSI ≤ 20`
-- **숏**: `가격 ≥ MA20` + `RSI ≥ 52`
+- **숏**: `가격 ≥ MA20` + `RSI ≥ 62` (설정값). 옵션으로 **RSI 꺾임**(전봉 대비 RSI 하락) 시에만 진입해 반등 초반 숏을 줄임. (`config_common`: `TREND_DOWNTREND_SHORT_RSI_MIN`, `TREND_DOWNTREND_SHORT_ENABLED`, `TREND_DOWNTREND_SHORT_REQUIRE_RSI_TURNDOWN`)
 
 ### 4.3 청산 조건
 
@@ -100,7 +106,7 @@
 - **strategy_core_paper.py** / **strategy_core_live.py** — 장세 판별, 진입 신호, 진입/보유 사유 문자열  
 - **exit_logic_paper.py** / **exit_logic_live.py** — 목표익절·손절·스탑로스·박스 이탈(상·하단 0.5% 돌파) 청산  
 - **funding.py** — 펀딩 레이트 조회, 00/08/16 UTC 정산·손익 계산  
-- **config_common.py** / **config_paper.py** / **config_live.py** — 공통·페이퍼·실거래 설정  
+- **config_common.py** / **config_paper.py** / **config_live.py** — 공통·페이퍼·실거래 설정. 추세장 진입(상승장 롱 RSI 40/터닝, 하락장 숏 RSI 62/꺾임), 일일·연속 손실 한도 등은 `config_common`에서 정의하며, `config_live`에서 실거래만 override 가능.  
 - **backtest.py** / **analyze_backtest.py** — 백테스트 및 장별 분석 (펀딩 옵션: `exchange` 인자)  
 - **trade_logger.py** — 매매 기록 `trades_log.csv`, 펀딩 기록 `funding_log.csv` (meta 필드는 JSON 형식)  
 - **daily_report.py** — 일일 매매 결과 리포트 이메일 전송 (`trades_log.csv` 기반, 전날 거래 내역 요약)  

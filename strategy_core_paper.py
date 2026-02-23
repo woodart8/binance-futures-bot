@@ -5,10 +5,10 @@
 장세 이탈: 박스는 직전 봉까지로 계산해, 가격이 상·하단 0.5% 돌파 시 neutral(중립) 전환.
 
 추세장: MA20 기울기 ±2.5% 초과 시 상승/하락 판단.
-- 상승장 롱: 가격 ≤ MA20 + RSI ≤ 48
+- 상승장 롱: 가격 ≤ MA20 + RSI ≤ 40(설정), 옵션으로 RSI 상승 전환 시에만 진입(조정 초반 롱 방지)
 - 상승장 숏: 가격 ≥ MA20 + RSI ≥ 80
 - 하락장 롱: 가격 ≤ MA20 + RSI ≤ 20
-- 하락장 숏: 가격 ≥ MA20 + RSI ≥ 52
+- 하락장 숏: 가격 ≥ MA20 + RSI ≥ 62(설정), 옵션으로 RSI 꺾임 시에만 진입(반등 초반 숏 방지)
 익절: 5.5%, 손절: 2.5%
 """
 
@@ -35,9 +35,13 @@ from config_paper import (
     TREND_SLOPE_BARS,
     TREND_SLOPE_MIN_PCT,
     TREND_UPTREND_LONG_RSI_MAX,
+    TREND_UPTREND_LONG_ENABLED,
+    TREND_UPTREND_LONG_REQUIRE_RSI_TURNUP,
     TREND_UPTREND_SHORT_RSI_MIN,
     TREND_DOWNTREND_LONG_RSI_MAX,
     TREND_DOWNTREND_SHORT_RSI_MIN,
+    TREND_DOWNTREND_SHORT_ENABLED,
+    TREND_DOWNTREND_SHORT_REQUIRE_RSI_TURNDOWN,
 )
 
 Signal = Literal["long", "short", "flat", "hold"]
@@ -292,9 +296,13 @@ def swing_strategy_signal(
         
         if not has_position:
             if uptrend:
-                # 상승장 롱: RSI ≤ 48 + 가격이 MA20 이하
-                if price <= ma_long and rsi_value <= TREND_UPTREND_LONG_RSI_MAX:
-                    return "long"
+                # 상승장 롱: RSI ≤ MAX + 가격이 MA20 이하 (+ 옵션: RSI 상승 전환 시에만, 조정 초반 롱 방지)
+                if TREND_UPTREND_LONG_ENABLED and price <= ma_long and rsi_value <= TREND_UPTREND_LONG_RSI_MAX:
+                    if TREND_UPTREND_LONG_REQUIRE_RSI_TURNUP:
+                        if rsi_prev is not None and rsi_value > rsi_prev:
+                            return "long"
+                    else:
+                        return "long"
                 # 상승장 숏: RSI ≥ 80 + 가격이 MA20 이상
                 if price >= ma_long and rsi_value >= TREND_UPTREND_SHORT_RSI_MIN:
                     return "short"
@@ -302,9 +310,13 @@ def swing_strategy_signal(
                 # 하락장 롱: RSI ≤ 20 + 가격이 MA20 이하
                 if price <= ma_long and rsi_value <= TREND_DOWNTREND_LONG_RSI_MAX:
                     return "long"
-                # 하락장 숏: RSI ≥ 52 + 가격이 MA20 이상
-                if price >= ma_long and rsi_value >= TREND_DOWNTREND_SHORT_RSI_MIN:
-                    return "short"
+                # 하락장 숏: RSI ≥ MIN + 가격이 MA20 이상 (+ 옵션: RSI 꺾임 시에만, 반등 초반 숏 방지)
+                if TREND_DOWNTREND_SHORT_ENABLED and price >= ma_long and rsi_value >= TREND_DOWNTREND_SHORT_RSI_MIN:
+                    if TREND_DOWNTREND_SHORT_REQUIRE_RSI_TURNDOWN:
+                        if rsi_prev is not None and rsi_value < rsi_prev:
+                            return "short"
+                    else:
+                        return "short"
         return "hold"
 
     # 중립: 진입 안 함
