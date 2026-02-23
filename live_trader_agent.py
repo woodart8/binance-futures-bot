@@ -50,8 +50,16 @@ def set_leverage_and_margin(exchange) -> None:
         exchange.set_leverage(LEVERAGE, symbol_id)
         exchange.set_margin_mode("isolated", symbol_id)
     except Exception as e:
-        err = str(e).lower()
-        if "2015" in err or "invalid api-key" in err or "permissions" in err:
+        err = str(e)
+        err_lower = err.lower()
+        # -4161: 오픈 포지션 있을 때 격리마진 모드에서 레버리지 축소 불가. 경고만 남기고 진행.
+        if "4161" in err or "leverage reduction" in err_lower or "open positions" in err_lower:
+            log(
+                f"[레버리지] 오픈 포지션으로 인해 설정 생략 (현재 레버 유지). 포지션 청산 후 재시작하면 {LEVERAGE}배 적용. 원문: {e!r}",
+                "WARNING",
+            )
+            return
+        if "2015" in err_lower or "invalid api-key" in err_lower or "permissions" in err_lower:
             log(
                 "레버리지/마진 설정 실패 (-2015). 확인: 1) API 키 권한에 '선물' 체크 2) IP 제한 시 서버 IP 허용 3) 키/시크릿 재확인",
                 "ERROR",
