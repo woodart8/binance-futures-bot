@@ -1,4 +1,7 @@
-"""실거래 전용 전략/청산/진입 로직. live_trader_agent.py에서만 사용."""
+"""실거래 전용 전략/청산/진입 로직. live_trader_agent.py에서만 사용.
+
+잔고: get_balance_usdt는 total 기준(손익·entry_balance 일관). 청산은 포지션 매칭 후 contracts>0일 때만 API 호출.
+"""
 
 import time
 from typing import Any, Dict, Tuple
@@ -33,13 +36,24 @@ from exit_logic import check_long_exit, check_short_exit, reason_to_display_mess
 from trade_logger import log_trade
 from logger import log
 
+# 바이낸스 선물 fetch_positions 반환 symbol이 "BTC/USDT" 또는 "BTC/USDT:USDT" 등으로 올 수 있음
+def _position_matches(pos: dict, symbol: str, side: str) -> bool:
+    ps = (pos.get("symbol") or "").strip()
+    if not ps:
+        return False
+    sym_norm = symbol.replace("/", "")
+    ps_norm = ps.replace("/", "").replace(":USDT", "")
+    return (ps == symbol or ps_norm == sym_norm) and (pos.get("side") == side)
+
 
 def get_balance_usdt(exchange) -> float:
-    """거래소 USDT 잔고(사용가능) 반환. 00/08/16 UTC 펀딩은 거래소가 자동 정산하므로 이미 반영됨."""
+    """거래소 USDT 총 잔고(total) 반환. 손익·진입 한도는 total 기준. 00/08/16 UTC 펀딩은 거래소가 자동 정산."""
     balance = exchange.fetch_balance()
     usdt_info = balance.get("USDT", {})
-    free = float(usdt_info.get("free", 0) or 0)
-    return free
+    total = float(usdt_info.get("total", 0) or 0)
+    if total == 0:
+        total = float(usdt_info.get("free", 0) or 0)
+    return total
 
 
 def init_live_state() -> Dict[str, Any]:
@@ -65,7 +79,8 @@ def init_live_state() -> Dict[str, Any]:
 def check_tp_sl_and_close(exchange, state: Dict[str, Any], current_price: float, df: pd.DataFrame) -> Tuple[Dict[str, Any], bool]:
     """
     새 5분봉이 뜬 뒤, 전봉 종가 기준 익절/손절 조건 만족 시 청산.
-    반환: (업데이트된 state, did_close).
+    포지션은 _position_matches로 심볼/사이드 매칭(바이낸스 BTC/USDT:USDT 등), 수량은 contracts 또는 positionAmt.
+    contracts<=0이면 주문 없이 return(청산생략 로그만). 반환: (업데이트된 state, did_close).
     """
     if not state.get("has_position"):
         return (state, False)
@@ -146,11 +161,14 @@ def check_tp_sl_and_close(exchange, state: Dict[str, Any], current_price: float,
     contracts = 0.0
     side_to_close = "long" if is_long else "short"
     for pos in positions:
-        if pos.get("symbol") == SYMBOL and pos.get("side") == side_to_close:
+        if _position_matches(pos, SYMBOL, side_to_close):
             contracts = float(pos.get("contracts", 0) or 0)
+            if contracts <= 0:
+                contracts = abs(float(pos.get("positionAmt", 0) or pos.get("info", {}).get("positionAmt", 0) or 0))
             break
 
     if contracts <= 0:
+        log(f"[청산생략] 포지션 미조회 contracts=0 (심볼/사이드: {SYMBOL} {side_to_close})", "WARNING")
         return (state, False)
 
     try:
@@ -164,6 +182,7 @@ def check_tp_sl_and_close(exchange, state: Dict[str, Any], current_price: float,
         log(f"청산 주문 실패: {e}", "ERROR")
         return (state, False)
 
+    time.sleep(1)  # 청산 정산 반영 대기 후 잔고 조회
     try:
         new_balance = get_balance_usdt(exchange)
     except Exception as e:
@@ -467,6 +486,7 @@ def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tu
     consecutive_limit_hit = consecutive_loss_count >= CONSECUTIVE_LOSS_LIMIT
 
     if has_position and signal == "flat":
+        # 청산: 포지션 조회 → contracts>0일 때만 API 주문 후 잔고/손익 로그. contracts=0이면 [청산실패] 로그 후 return(API 안 감).
         close_reason = reason_to_display_message(reason, is_long) if reason else "전략청산"
         try:
             positions = exchange.fetch_positions([SYMBOL])
@@ -478,20 +498,26 @@ def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tu
         contracts = 0.0
         side_to_close = "long" if is_long else "short"
         for pos in positions:
-            if pos.get("symbol") == SYMBOL and pos.get("side") == side_to_close:
+            if _position_matches(pos, SYMBOL, side_to_close):
                 contracts = float(pos.get("contracts", 0) or 0)
+                if contracts <= 0:
+                    contracts = abs(float(pos.get("positionAmt", 0) or pos.get("info", {}).get("positionAmt", 0) or 0))
                 break
 
-        if contracts > 0:
-            try:
-                if is_long:
-                    exchange.create_market_sell_order(SYMBOL, contracts, {"reduceOnly": True})
-                else:
-                    exchange.create_market_buy_order(SYMBOL, contracts, {"reduceOnly": True})
-            except Exception as e:
-                log(f"청산 주문 실패: {e}", "ERROR")
-                return (state, True, False)
+        if contracts <= 0:
+            log(f"[청산실패] 포지션 미조회 contracts=0 (심볼/사이드: {SYMBOL} {side_to_close}) — API 청산 요청 안 감", "WARNING")
+            return (state, False, False)
 
+        try:
+            if is_long:
+                exchange.create_market_sell_order(SYMBOL, contracts, {"reduceOnly": True})
+            else:
+                exchange.create_market_buy_order(SYMBOL, contracts, {"reduceOnly": True})
+        except Exception as e:
+            log(f"청산 주문 실패: {e}", "ERROR")
+            return (state, True, False)
+
+        time.sleep(1)  # 청산 정산 반영 대기 후 잔고 조회
         try:
             new_balance = get_balance_usdt(exchange)
         except Exception as e:
