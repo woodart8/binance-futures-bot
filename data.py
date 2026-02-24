@@ -57,25 +57,19 @@ def fetch_ohlcv(exchange, limit: int = 400, symbol: str = SYMBOL, timeframe: str
 
 # 바이낸스는 요청당 최대 1000봉. 실거래/페이퍼에서 5분봉 288개(REGIME_LOOKBACK_15M*3) 확보하려면 1분봉 1500+ 필요.
 def fetch_ohlcv_1m_min_bars(exchange, min_bars: int = 2000, symbol: str = SYMBOL) -> pd.DataFrame:
-    """1분봉을 API 한도(1000)씩 나눠 요청해 최소 min_bars개 수집."""
-    batch = 1000
-    all_ohlcv = _fetch_ohlcv_with_retry(exchange, symbol, "1m", batch)
-    if not all_ohlcv:
+    """1분봉을 history API로 여러 번 받아 최소 min_bars개 이상 확보.
+
+    Binance는 요청당 최대 1000봉(limit=1000)만 반환하므로,
+    내부의 `_fetch_ohlcv_history_1m`(days 단위 배치 수집)을 활용해
+    충분한 일 수(days)를 가져온 뒤 tail(min_bars)만 사용한다.
+    """
+    # min_bars 기준으로 필요한 일 수 대략 계산 (1일=1440분, 약간 여유 있게 +1일)
+    days = max(1, (min_bars // (24 * 60)) + 1)
+    df = _fetch_ohlcv_history_1m(exchange, days=days, batch_size=1000)
+    if df.empty:
         return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
-    while len(all_ohlcv) < min_bars:
-        since_ms = int(all_ohlcv[0][0]) - batch * 60 * 1000
-        older = _fetch_ohlcv_with_retry(exchange, symbol, "1m", batch, since=since_ms)
-        if not older:
-            break
-        existing_ts = {r[0] for r in all_ohlcv}
-        older = [r for r in older if r[0] not in existing_ts]
-        if not older:
-            break
-        all_ohlcv = older + all_ohlcv
-        all_ohlcv.sort(key=lambda x: x[0])
-        time.sleep(0.2)
-    df = pd.DataFrame(all_ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
-    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+    if len(df) > min_bars:
+        df = df.tail(min_bars)
     return df.sort_values("timestamp").drop_duplicates(subset=["timestamp"]).reset_index(drop=True)
 
 
