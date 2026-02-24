@@ -111,6 +111,7 @@ def main() -> None:
                 bar_closed_1m = df_closed_1m.iloc[-1]
                 price = float(bar_closed_1m["close"])
                 df_closed_5m = df_5m.iloc[:-1] if len(df_5m) >= 2 else df_5m
+                candle_5m_closed = df_closed_5m.iloc[-1]  # 전략용 5분봉 (rsi/MA 포함)
 
                 if len(df_closed_5m) < REGIME_LOOKBACK_15M * 3:
                     last_candle_time = latest_time
@@ -126,8 +127,9 @@ def main() -> None:
                         time.sleep(CHECK_INTERVAL)
                         continue
                 # 2) 전략 신호 청산(flat) 및 로그 (전봉 기준) — 청산 시 로그는 즉시 출력
+                #    전략 로직은 5분봉(rsi/MA 포함)을 사용하므로 candle_5m_closed를 넘긴다.
                 if not closed_this_candle:
-                    did_close = apply_strategy_on_candle(state, bar_closed_1m, df_closed_5m, log_hold_info=False)
+                    did_close = apply_strategy_on_candle(state, candle_5m_closed, df_closed_5m, log_hold_info=False)
                     last_candle_time = latest_time
                     if did_close:
                         closed_this_candle = True
