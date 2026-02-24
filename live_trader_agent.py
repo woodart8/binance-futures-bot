@@ -102,7 +102,8 @@ def main() -> None:
             df_5m["ma_long"] = calculate_ma(df_5m["close"], MA_LONG_PERIOD)
             df_5m["ma_50"] = calculate_ma(df_5m["close"], MA_MID_PERIOD)
             df_5m["ma_100"] = calculate_ma(df_5m["close"], MA_LONGEST_PERIOD)
-            df_5m = df_5m.dropna().reset_index(drop=True)
+            # 장세 계산용 5분봉 히스토리는 analyze_regime와 동일하게 전체 사용 (dropna로 앞부분을 날리지 않음)
+            df_5m = df_5m.reset_index(drop=True)
 
             latest_1m = df_1m.iloc[-1]
             latest_time = latest_1m["timestamp"]
