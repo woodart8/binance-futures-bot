@@ -377,7 +377,7 @@ def try_live_entry(exchange, state: Dict[str, Any], df: pd.DataFrame, current_pr
 
 def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tuple[Dict[str, Any], bool, bool]:
     """
-    새 5분봉이 뜬 뒤, 전봉 기준 청산/상태 처리. exchange 주문 호출 포함.
+    새 5분봉이 뜬 뒤, 전봉 종가 기준 익절/손절/박스이탈 판단 후 청산 주문 실행.
     반환: (업데이트된 state, skip, did_close)
     skip=True 이면 60초 대기 후 재조회. did_close=True 이면 해당 턴에 5분 로그 생략.
     """
@@ -475,71 +475,71 @@ def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tu
             time.sleep(60)
             return (state, True, False)
 
-            contracts = 0.0
-            side_to_close = "long" if is_long else "short"
-            for pos in positions:
-                if pos.get("symbol") == SYMBOL and pos.get("side") == side_to_close:
-                    contracts = float(pos.get("contracts", 0) or 0)
-                    break
+        contracts = 0.0
+        side_to_close = "long" if is_long else "short"
+        for pos in positions:
+            if pos.get("symbol") == SYMBOL and pos.get("side") == side_to_close:
+                contracts = float(pos.get("contracts", 0) or 0)
+                break
 
-            if contracts > 0:
-                try:
-                    if is_long:
-                        exchange.create_market_sell_order(SYMBOL, contracts, {"reduceOnly": True})
-                    else:
-                        exchange.create_market_buy_order(SYMBOL, contracts, {"reduceOnly": True})
-                except Exception as e:
-                    log(f"청산 주문 실패: {e}", "ERROR")
-                    return (state, True, False)
-
+        if contracts > 0:
             try:
-                new_balance = get_balance_usdt(exchange)
+                if is_long:
+                    exchange.create_market_sell_order(SYMBOL, contracts, {"reduceOnly": True})
+                else:
+                    exchange.create_market_buy_order(SYMBOL, contracts, {"reduceOnly": True})
             except Exception as e:
-                log(f"청산 후 잔고 조회 실패: {e}", "ERROR")
-                new_balance = balance
-            pnl = new_balance - entry_balance
-            if pnl < 0:
-                consecutive_loss_count += 1
-            else:
-                consecutive_loss_count = 0
-            pnl_pct = (price - entry_price) / entry_price * LEVERAGE * 100 if is_long else (entry_price - price) / entry_price * LEVERAGE * 100
-            side_str = "LONG" if is_long else "SHORT"
-            regime_kr = REGIME_KR.get(entry_regime, entry_regime)
-            log(f"{side_str} 청산 | {regime_kr} | {close_reason} | 진입={entry_price:.2f} 청산={price:.2f} 수익률={pnl_pct:+.2f}% 손익={pnl:+.2f} 잔고={new_balance:.2f}")
-            log_trade(
-                side="LONG" if is_long else "SHORT",
-                entry_price=entry_price,
-                exit_price=price,
-                pnl=pnl,
-                balance_after=new_balance,
-                meta={
-                    "timeframe": TIMEFRAME,
-                    "symbol": SYMBOL,
-                    "mode": "live",
-                    "regime": entry_regime,
-                    "pnl_pct": round(pnl_pct, 2),
-                    "consecutive_loss": consecutive_loss_count,
-                    "reason": close_reason,
-                },
-            )
-            new_state = {
-                **state,
-                "has_position": False,
-                "is_long": False,
-                "entry_price": 0.0,
-                "entry_regime": "",
-                "box_high_entry": 0.0,
-                "box_low_entry": 0.0,
-                "highest_price": 0.0,
-                "lowest_price": float("inf"),
-                "best_pnl_pct": 0.0,
-                "entry_balance": new_balance,
-                "consecutive_loss_count": consecutive_loss_count,
-                "daily_start_balance": daily_start_balance,
-                "daily_start_date": daily_start_date,
-                "last_candle_time": latest_time,
-            }
-            return (new_state, False, True)
+                log(f"청산 주문 실패: {e}", "ERROR")
+                return (state, True, False)
+
+        try:
+            new_balance = get_balance_usdt(exchange)
+        except Exception as e:
+            log(f"청산 후 잔고 조회 실패: {e}", "ERROR")
+            new_balance = balance
+        pnl = new_balance - entry_balance
+        if pnl < 0:
+            consecutive_loss_count += 1
+        else:
+            consecutive_loss_count = 0
+        pnl_pct = (price - entry_price) / entry_price * LEVERAGE * 100 if is_long else (entry_price - price) / entry_price * LEVERAGE * 100
+        side_str = "LONG" if is_long else "SHORT"
+        regime_kr = REGIME_KR.get(entry_regime, entry_regime)
+        log(f"{side_str} 청산 | {regime_kr} | {close_reason} | 진입={entry_price:.2f} 청산={price:.2f} 수익률={pnl_pct:+.2f}% 손익={pnl:+.2f} 잔고={new_balance:.2f}")
+        log_trade(
+            side="LONG" if is_long else "SHORT",
+            entry_price=entry_price,
+            exit_price=price,
+            pnl=pnl,
+            balance_after=new_balance,
+            meta={
+                "timeframe": TIMEFRAME,
+                "symbol": SYMBOL,
+                "mode": "live",
+                "regime": entry_regime,
+                "pnl_pct": round(pnl_pct, 2),
+                "consecutive_loss": consecutive_loss_count,
+                "reason": close_reason,
+            },
+        )
+        new_state = {
+            **state,
+            "has_position": False,
+            "is_long": False,
+            "entry_price": 0.0,
+            "entry_regime": "",
+            "box_high_entry": 0.0,
+            "box_low_entry": 0.0,
+            "highest_price": 0.0,
+            "lowest_price": float("inf"),
+            "best_pnl_pct": 0.0,
+            "entry_balance": new_balance,
+            "consecutive_loss_count": consecutive_loss_count,
+            "daily_start_balance": daily_start_balance,
+            "daily_start_date": daily_start_date,
+            "last_candle_time": latest_time,
+        }
+        return (new_state, False, True)
 
     # 5분 상태 로그용: 갱신된 state 반영 (청산/진입 없을 때도 highest/lowest/best_pnl 등 반영)
     out = {
