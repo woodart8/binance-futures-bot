@@ -60,8 +60,8 @@ def main() -> None:
     log(f"시작 잔고={INITIAL_BALANCE:.2f}")
 
     last_candle_time = None
-    # 1분봉 수집 후 5분봉으로 리샘플해 장세/RSI 사용. 15분봉 96개 확보용 1분봉 여유있게
-    limit_1m = (MA_LONGEST_PERIOD + REGIME_LOOKBACK_15M) * 3 + 500
+    # 1분봉 수집 후 5분봉 리샘플. len(df_closed_5m) >= REGIME_LOOKBACK_15M*3(288) 필요 → 5분봉 288개 = 1분봉 1440개 이상
+    limit_1m = 2000
 
     try:
         while True:
