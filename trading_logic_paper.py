@@ -398,9 +398,9 @@ def try_paper_entry(state: PaperState, df: pd.DataFrame, current_price: float) -
     open_curr = float(latest["open"])
 
     if len(df) >= REGIME_LOOKBACK_15M * 3:
-        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, _, ma_long_history = compute_regime_15m(df, current_price)
+        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, rsi_15m_prev, ma_long_history = compute_regime_15m(df, current_price)
     else:
-        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, ma_long_history = "neutral", 0.0, 0.0, 0.0, 0.0, [], 0.0, []
+        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, rsi_15m_prev, ma_long_history = "neutral", 0.0, 0.0, 0.0, 0.0, [], 0.0, None, []
     if len(df) >= SIDEWAYS_BOX_PERIOD:
         tail = df.tail(SIDEWAYS_BOX_PERIOD + 1)
         price_history = list(zip(tail["high"].tolist(), tail["low"].tolist(), tail["close"].tolist()))
@@ -408,11 +408,13 @@ def try_paper_entry(state: PaperState, df: pd.DataFrame, current_price: float) -
         price_history = None
     use_15m = len(price_history_15m) >= REGIME_LOOKBACK_15M
     regime_price_hist = price_history_15m if (use_15m and regime == "sideways") else None
+    rsi_value = float(rsi_15m) if (use_15m and rsi_15m is not None) else rsi
+    rsi_prev_use = rsi_15m_prev if (use_15m and rsi_15m_prev is not None) else rsi_prev
 
     signal = swing_strategy_signal(
-        rsi_value=rsi,
+        rsi_value=rsi_value,
         price=current_price,
-        rsi_prev=rsi_prev,
+        rsi_prev=rsi_prev_use,
         open_prev=open_prev,
         close_prev=close_prev,
         open_curr=open_curr,
@@ -451,7 +453,7 @@ def try_paper_entry(state: PaperState, df: pd.DataFrame, current_price: float) -
 
     if signal == "long":
         reason = get_entry_reason(
-            regime, "LONG", rsi, current_price, short_ma, long_ma,
+            regime, "LONG", rsi_value, current_price, short_ma, long_ma,
             regime_short_ma=short_ma_15m if use_15m else None,
             regime_long_ma=long_ma_15m if use_15m else None,
             regime_ma_50=ma_50_15m if use_15m else None,
@@ -467,7 +469,7 @@ def try_paper_entry(state: PaperState, df: pd.DataFrame, current_price: float) -
         return True
     else:
         reason = get_entry_reason(
-            regime, "SHORT", rsi, current_price, short_ma, long_ma,
+            regime, "SHORT", rsi_value, current_price, short_ma, long_ma,
             regime_short_ma=short_ma_15m if use_15m else None,
             regime_long_ma=long_ma_15m if use_15m else None,
             regime_ma_50=ma_50_15m if use_15m else None,
@@ -484,18 +486,25 @@ def try_paper_entry(state: PaperState, df: pd.DataFrame, current_price: float) -
 
 
 def apply_strategy_on_candle(
-    state: PaperState, candle: pd.Series, df: Optional[pd.DataFrame] = None, regime: Optional[str] = None
+    state: PaperState,
+    candle: pd.Series,
+    df: Optional[pd.DataFrame] = None,
+    regime: Optional[str] = None,
+    *,
+    log_hold_info: bool = True,
 ) -> bool:
-    """새 5분봉 시 상태/청산만 처리. 진입은 try_paper_entry(새 봉 시)에서만. 반환: 이번에 청산했으면 True."""
+    """새 5분봉 시 상태/청산만 처리. 진입은 try_paper_entry(새 봉 시)에서만.
+    log_hold_info=False면 [진입안함]/[청산대기] 등 정보 로그 생략(5분봉 시점에만 출력할 때 사용).
+    반환: 이번에 청산했으면 True."""
     price = float(candle["close"])
     rsi = float(candle["rsi"])
     short_ma = float(candle["ma_short"])
     long_ma = float(candle["ma_long"])
 
     short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m = 0.0, 0.0, 0.0, 0.0, []
-    rsi_15m = None
+    rsi_15m, rsi_15m_prev, ma_long_history = None, None, []
     if regime is None and df is not None and len(df) >= REGIME_LOOKBACK_15M * 3:
-        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, ma_long_history = compute_regime_15m(df, price)
+        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, rsi_15m_prev, ma_long_history = compute_regime_15m(df, price)
     if regime is None:
         regime = "neutral"
 
@@ -509,11 +518,12 @@ def apply_strategy_on_candle(
         price_history = None
 
     use_15m = len(price_history_15m) >= REGIME_LOOKBACK_15M
-    rsi_prev = float(df["rsi"].iloc[-2]) if df is not None and len(df) >= 2 else None
+    rsi_prev_5m = float(df["rsi"].iloc[-2]) if df is not None and len(df) >= 2 else None
+    rsi_prev = rsi_15m_prev if (use_15m and rsi_15m_prev is not None) else rsi_prev_5m
     open_prev = float(df["open"].iloc[-2]) if df is not None and len(df) >= 2 else None
     close_prev = float(df["close"].iloc[-2]) if df is not None and len(df) >= 2 else None
     open_curr = float(candle["open"])
-    rsi_use = rsi
+    rsi_use = float(rsi_15m) if (use_15m and rsi_15m is not None) else rsi
     regime_price_hist = price_history_15m if (use_15m and regime == "sideways") else None
     signal = swing_strategy_signal(
         rsi_value=rsi_use,
@@ -557,26 +567,27 @@ def apply_strategy_on_candle(
         _update_equity_and_drawdown(state, price)
         return True
     else:
-        if not has_position:
-            if daily_limit_hit or consecutive_limit_hit:
-                if daily_limit_hit:
-                    _log_daily_limit_once(current_date, daily_loss_pct, regime_kr)
-                elif consecutive_limit_hit:
-                    log(f"[진입안함] {regime_kr} | 연속손실 {state.consecutive_loss_count}회 당일 중단")
-            else:
-                reason = get_hold_reason(
-                    regime, rsi_use, price, short_ma, long_ma,
-                    regime_short_ma=short_ma_15m if use_15m else None,
-                    regime_long_ma=long_ma_15m if use_15m else None,
-                    regime_ma_50=ma_50_15m if use_15m else None,
-                    regime_ma_100=ma_100_15m if use_15m else None,
-                    regime_price_history=regime_price_hist,
-                    regime_ma_long_history=ma_long_history if use_15m else None,
-                    price_history=price_history,
-                )
-                log(f"[진입안함] {regime_kr} | {reason}")
-        elif has_position and signal == "hold":
-            log(f"[청산대기] {regime_kr} | {_reason_no_exit_strategy(regime, is_long, rsi, price, short_ma)}")
+        if log_hold_info:
+            if not has_position:
+                if daily_limit_hit or consecutive_limit_hit:
+                    if daily_limit_hit:
+                        _log_daily_limit_once(current_date, daily_loss_pct, regime_kr)
+                    elif consecutive_limit_hit:
+                        log(f"[진입안함] {regime_kr} | 연속손실 {state.consecutive_loss_count}회 당일 중단")
+                else:
+                    reason = get_hold_reason(
+                        regime, rsi_use, price, short_ma, long_ma,
+                        regime_short_ma=short_ma_15m if use_15m else None,
+                        regime_long_ma=long_ma_15m if use_15m else None,
+                        regime_ma_50=ma_50_15m if use_15m else None,
+                        regime_ma_100=ma_100_15m if use_15m else None,
+                        regime_price_history=regime_price_hist,
+                        regime_ma_long_history=ma_long_history if use_15m else None,
+                        price_history=price_history,
+                    )
+                    log(f"[진입안함] {regime_kr} | {reason}")
+            elif has_position and signal == "hold":
+                log(f"[청산대기] {regime_kr} | {_reason_no_exit_strategy(regime, is_long, rsi_use, price, short_ma)}")
 
     _update_equity_and_drawdown(state, price)
     return False

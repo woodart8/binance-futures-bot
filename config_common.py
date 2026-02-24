@@ -41,7 +41,7 @@ TREND_DOWNTREND_SHORT_RSI_MIN = 62  # 하락장 숏: RSI ≥ 62 (반등 초반 �
 TREND_DOWNTREND_SHORT_ENABLED = True  # False면 하락장에서 숏 진입 안 함
 TREND_DOWNTREND_SHORT_REQUIRE_RSI_TURNDOWN = True  # True면 RSI가 전봉 대비 꺾일 때만 숏 (반등 exhaustion)
 
-# 횡보장 박스
+# 횡보장 박스 (진입/청산 시 박스는 15분봉 96개만 사용. SIDEWAYS_BOX_PERIOD는 detect_market_regime 등 내부용)
 SIDEWAYS_ENABLED = True
 SIDEWAYS_BOX_PERIOD = 48
 SIDEWAYS_BOX_TOP_MARGIN = 0.03   # 박스 상단에서 3% 이내 진입(숏)

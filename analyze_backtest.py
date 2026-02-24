@@ -333,17 +333,25 @@ def print_detailed_trade_analysis(result: BacktestResult, df: pd.DataFrame, top_
         kr = REGIME_KR.get(key[0], key[0])
         print(f"  {kr} + {key[1]}: {pnl:+.2f} USDT")
 
-def run_and_analyze(days: int = 600) -> None:
-    print(f"5분봉 {days}일치 데이터 수집 중...")
-    exchange = get_public_exchange()
-    df = fetch_ohlcv_history(exchange, days=days)
+def run_and_analyze(days: int = 600, use_1m: bool = True) -> None:
+    """use_1m=True면 1분봉 기준 백테스트(매 1분 진입/청산 판단), False면 5분봉 기준."""
+    if use_1m:
+        print(f"1분봉 {days}일치 데이터 수집 중...")
+        exchange = get_public_exchange()
+        df = fetch_ohlcv_history(exchange, days=days, timeframe="1m")
+        candle_tf = "1m"
+    else:
+        print(f"5분봉 {days}일치 데이터 수집 중...")
+        exchange = get_public_exchange()
+        df = fetch_ohlcv_history(exchange, days=days)
+        candle_tf = "5m"
     if df.empty:
         print("데이터 없음.")
         return
     days_actual = (df["timestamp"].iloc[-1] - df["timestamp"].iloc[0]).days
 
-    print(f"백테스트 실행 중... (기간: {days_actual}일)")
-    result = run_backtest(df)
+    print(f"백테스트 실행 중... (기간: {days_actual}일, {candle_tf} 기준)")
+    result = run_backtest(df, exchange=exchange, candle_tf=candle_tf)
 
     # 전체 요약
     print("\n" + "=" * 60)

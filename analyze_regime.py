@@ -27,7 +27,7 @@ def main():
 
     # compute_regime_15m 호출로 실제 regime 및 15m MA 확보 (data 내부에서 리샘플·MA 계산)
     current_price = float(df["close"].iloc[-1])
-    regime, short_ma, long_ma, ma_50, ma_100, price_history_15m, rsi_15m, _ = compute_regime_15m(df, current_price)
+    regime, short_ma, long_ma, ma_50, ma_100, price_history_15m, rsi_15m, _, _ = compute_regime_15m(df, current_price)
     if not price_history_15m or len(price_history_15m) < REGIME_LOOKBACK_15M:
         print("15분봉 데이터 부족: 5분봉", len(df), "개 -> 15분봉", len(price_history_15m) if price_history_15m else 0, "개 (필요:", REGIME_LOOKBACK_15M, ")")
         return

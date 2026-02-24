@@ -101,7 +101,7 @@ def check_tp_sl_and_close(exchange, state: Dict[str, Any], current_price: float,
     consecutive_loss_count = state["consecutive_loss_count"]
 
     if len(df) >= REGIME_LOOKBACK_15M * 3:
-        regime, _, _, _, _, price_history_15m, _, _ = compute_regime_15m(df, current_price)
+        regime, _, _, _, _, price_history_15m, _, _, _ = compute_regime_15m(df, current_price)
     else:
         regime = "neutral"
 
@@ -231,9 +231,17 @@ def check_tp_sl_and_close(exchange, state: Dict[str, Any], current_price: float,
     return (new_state, True)
 
 
-def try_live_entry(exchange, state: Dict[str, Any], df: pd.DataFrame, current_price: float) -> Tuple[Dict[str, Any], bool]:
+def try_live_entry(
+    exchange,
+    state: Dict[str, Any],
+    df: pd.DataFrame,
+    current_price: float,
+    *,
+    log_hold_info: bool = True,
+) -> Tuple[Dict[str, Any], bool]:
     """
     새 5분봉이 뜬 뒤, 전봉 종가 기준 진입 조건 만족 시 시장가 진입(수량은 전봉 종가 기준).
+    log_hold_info=False면 [진입생략] 로그 생략(5분봉 시점에만 정보 출력할 때 사용).
     반환: (업데이트된 state, did_enter).
     """
     if state.get("has_position"):
@@ -250,9 +258,9 @@ def try_live_entry(exchange, state: Dict[str, Any], df: pd.DataFrame, current_pr
     open_curr = float(latest["open"])
 
     if len(df) >= REGIME_LOOKBACK_15M * 3:
-        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, ma_long_history = compute_regime_15m(df, current_price)
+        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, rsi_15m_prev, ma_long_history = compute_regime_15m(df, current_price)
     else:
-        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, ma_long_history = "neutral", 0.0, 0.0, 0.0, 0.0, [], 0.0, []
+        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, rsi_15m_prev, ma_long_history = "neutral", 0.0, 0.0, 0.0, 0.0, [], 0.0, None, []
     if len(df) >= SIDEWAYS_BOX_PERIOD:
         tail = df.tail(SIDEWAYS_BOX_PERIOD + 1)
         price_history = list(zip(tail["high"].tolist(), tail["low"].tolist(), tail["close"].tolist()))
@@ -260,11 +268,13 @@ def try_live_entry(exchange, state: Dict[str, Any], df: pd.DataFrame, current_pr
         price_history = df["close"].tolist()
     use_15m = len(price_history_15m) >= REGIME_LOOKBACK_15M
     regime_price_hist = price_history_15m if (use_15m and regime == "sideways") else None
+    rsi_value = float(rsi_15m) if (use_15m and rsi_15m is not None) else rsi
+    rsi_prev_use = rsi_15m_prev if (use_15m and rsi_15m_prev is not None) else rsi_prev
 
     signal = swing_strategy_signal(
-        rsi_value=rsi,
+        rsi_value=rsi_value,
         price=current_price,
-        rsi_prev=rsi_prev,
+        rsi_prev=rsi_prev_use,
         open_prev=open_prev,
         close_prev=close_prev,
         open_curr=open_curr,
@@ -304,10 +314,11 @@ def try_live_entry(exchange, state: Dict[str, Any], df: pd.DataFrame, current_pr
     daily_limit_hit = daily_loss_pct >= DAILY_LOSS_LIMIT_PCT
     consecutive_limit_hit = consecutive_loss_count >= CONSECUTIVE_LOSS_LIMIT
     if daily_limit_hit or consecutive_limit_hit:
-        if daily_limit_hit:
-            log(f"[진입생략] 일일손실한도 {daily_loss_pct:.1f}% | 잔고={balance:.2f}")
-        else:
-            log(f"[진입생략] 연속손실 {consecutive_loss_count}회 당일 중단 | 시그널={signal}")
+        if log_hold_info:
+            if daily_limit_hit:
+                log(f"[진입생략] 일일손실한도 {daily_loss_pct:.1f}% | 잔고={balance:.2f}")
+            else:
+                log(f"[진입생략] 연속손실 {consecutive_loss_count}회 당일 중단 | 시그널={signal}")
         return (state, False)
 
     order_usdt = balance * POSITION_SIZE_PERCENT  # 마진(투입 담보)
@@ -422,9 +433,9 @@ def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tu
     consecutive_loss_count = state["consecutive_loss_count"]
 
     if len(df) >= REGIME_LOOKBACK_15M * 3:
-        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, ma_long_history = compute_regime_15m(df, price)
+        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, rsi_15m_prev, ma_long_history = compute_regime_15m(df, price)
     else:
-        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, ma_long_history = "neutral", 0.0, 0.0, 0.0, 0.0, [], 0.0, []
+        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, rsi_15m_prev, ma_long_history = "neutral", 0.0, 0.0, 0.0, 0.0, [], 0.0, None, []
 
     if len(df) >= SIDEWAYS_BOX_PERIOD:
         tail = df.tail(SIDEWAYS_BOX_PERIOD + 1)
@@ -610,7 +621,7 @@ def log_5m_status(exchange, state: Dict[str, Any], df: pd.DataFrame) -> None:
     # 현재 장세 판단 및 상세 정보 계산
     regime_detail = ""
     if len(df) >= REGIME_LOOKBACK_15M * 3:
-        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, ma_long_history = compute_regime_15m(df, price)
+        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, rsi_15m_prev, ma_long_history = compute_regime_15m(df, price)
         
         if regime == "trend":
             # 추세장: MA20 기울기 정보

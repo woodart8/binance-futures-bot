@@ -1,7 +1,7 @@
 """페이퍼 트레이딩. python paper_trading.py
 
-진입·청산은 백테스트와 동일: 새 5분봉이 데이터에 뜬 뒤, 방금 종료된 봉(전봉)의 종가로만 판단.
-같은 봉에서 청산한 경우 해당 봉에서는 재진입하지 않음.
+진입·청산 판단: 새 1분봉이 생길 때마다, 방금 종료된 1분봉 종가로 판단. 장세/RSI는 1분봉을 5분봉으로 리샘플한 데이터 기준.
+같은 1분봉에서 청산한 경우 해당 봉에서는 재진입하지 않음.
 """
 
 import sys
@@ -35,7 +35,7 @@ from config import (
     SIDEWAYS_BOX_RANGE_MIN,
 )
 from exchange_client import get_public_exchange
-from data import fetch_ohlcv, compute_regime_15m
+from data import fetch_ohlcv, compute_regime_15m, resample_1m_to_5m
 from indicators import calculate_rsi, calculate_ma
 from strategy_core import REGIME_KR, get_sideways_box_bounds
 from logger import log
@@ -49,7 +49,7 @@ from trading_logic_paper import (
     apply_funding_if_needed,
 )
 
-# 루프 주기(초). 이 간격마다 OHLCV 조회; 진입·청산 판단은 새 5분봉이 뜰 때만 수행.
+# 루프 주기(초). 이 간격마다 OHLCV 조회; 진입·청산 판단은 새 1분봉이 뜰 때만 수행.
 CHECK_INTERVAL = 10
 
 
@@ -110,32 +110,38 @@ def main() -> None:
                 df_closed = df.iloc[:-1]  # 진행 중인 봉 제외, 전봉까지
                 bar_closed = df_closed.iloc[-1]  # 방금 종료된 봉
                 price = float(bar_closed["close"])
+                # 정보 로그는 5분봉 생기는 시점에만 출력 (진입/청산 로그는 항상 바로 출력)
+                bar_ts = pd.Timestamp(bar_closed.get("timestamp"))
+                delta_sec = (latest_time - last_candle_time).total_seconds() if last_candle_time else 300
+                is_5m_boundary = (delta_sec >= 120) or (bar_ts.minute % 5 == 4)
+
                 closed_this_candle = False  # 같은 봉에서 청산 시 해당 봉에서는 재진입 안 함 (백테스트와 동일)
-                # 1) 익절/손절/박스이탈 체크 (전봉 종가 기준)
+                # 1) 익절/손절/박스이탈 체크 (전봉 종가 기준) — 청산 시 로그는 즉시 출력
                 if state.has_long_position or state.has_short_position:
                     if check_scalp_stop_loss_and_profit(state, price, bar_closed, df_closed):
                         closed_this_candle = True
                         last_candle_time = latest_time
                         time.sleep(CHECK_INTERVAL)
                         continue
-                # 2) 전략 신호 청산(flat) 및 로그 (전봉 기준)
+                # 2) 전략 신호 청산(flat) 및 로그 (전봉 기준) — 청산 시 로그는 즉시 출력
                 if not closed_this_candle:
-                    did_close = apply_strategy_on_candle(state, bar_closed, df_closed)
+                    did_close = apply_strategy_on_candle(state, bar_closed, df_closed, log_hold_info=is_5m_boundary)
                     last_candle_time = latest_time
                     if did_close:
                         closed_this_candle = True
                         time.sleep(CHECK_INTERVAL)
                         continue
-                # 3) 진입 (전봉 종가 기준) — 같은 봉에서 청산한 경우 이 봉에서는 진입하지 않음
+                # 3) 진입 (전봉 종가 기준) — 진입 시 로그는 즉시 출력
                 if not closed_this_candle and not (state.has_long_position or state.has_short_position):
                     if try_paper_entry(state, df_closed, price):
+                        last_candle_time = latest_time
                         time.sleep(CHECK_INTERVAL)
                         continue
 
-                # 현재 장세 판단 및 상세 정보 계산 (전봉 기준)
+                # 현재 장세 판단 및 상세 정보: 5분봉 생기는 시점에만 출력
                 regime_detail = ""
                 if len(df_closed) >= REGIME_LOOKBACK_15M * 3:
-                    regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, ma_long_history = compute_regime_15m(df_closed, price)
+                    regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, _, ma_long_history = compute_regime_15m(df_closed, price)
                     
                     if regime == "trend":
                         # 추세장: MA20 기울기 정보
@@ -177,8 +183,10 @@ def main() -> None:
                 if state.entry_regime == "sideways" and state.box_high > 0 and state.box_low > 0:
                     box_str = f" | 박스 하단={state.box_low:.2f} 상단={state.box_high:.2f}"
                 rsi = float(bar_closed["rsi"])
-                log(f"[5분] {pos_status}{regime_str}{box_str}{regime_detail} | 가격={price:.2f} RSI={rsi:.0f} 잔고={state.balance:.2f} PNL={total_pnl:+.2f}{extra}")
+                if is_5m_boundary:
+                    log(f"[5분] {pos_status}{regime_str}{box_str}{regime_detail} | 가격={price:.2f} RSI={rsi:.0f} 잔고={state.balance:.2f} PNL={total_pnl:+.2f}{extra}")
 
+                last_candle_time = latest_time
             time.sleep(CHECK_INTERVAL)
 
     except KeyboardInterrupt:

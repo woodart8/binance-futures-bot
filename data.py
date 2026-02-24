@@ -55,6 +55,17 @@ def fetch_ohlcv(exchange, limit: int = 400, symbol: str = SYMBOL, timeframe: str
     return df
 
 
+def resample_1m_to_5m(df_1m: pd.DataFrame) -> pd.DataFrame:
+    """1분봉 DataFrame을 5분봉으로 리샘플. 컬럼: timestamp, open, high, low, close, volume."""
+    if df_1m.empty:
+        return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+    df = df_1m.copy()
+    df = df.set_index("timestamp").resample("5min").agg(
+        {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+    ).dropna()
+    return df.reset_index()
+
+
 def compute_regime_15m(df: pd.DataFrame, current_price: float) -> tuple:
     """
     15분봉 기준 장세 계산.
@@ -62,7 +73,7 @@ def compute_regime_15m(df: pd.DataFrame, current_price: float) -> tuple:
     MA100 계산을 위해 충분한 데이터(약 33시간)를 가져온 후, 최근 24시간(96개 15분봉)만 사용.
     
     Returns:
-        (regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, ma_long_history)
+        (regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, rsi_15m_prev, ma_long_history)
     """
     df_tmp = df.copy()
     df_tmp["timestamp"] = pd.to_datetime(df_tmp["timestamp"])
@@ -81,15 +92,15 @@ def compute_regime_15m(df: pd.DataFrame, current_price: float) -> tuple:
     df_15m = df_15m.reset_index()
     # MA100 계산을 위해 최소 100개 필요
     if len(df_15m) < MA_LONGEST_PERIOD:
-        return ("neutral", 0.0, 0.0, 0.0, 0.0, [], None, [])
+        return ("neutral", 0.0, 0.0, 0.0, 0.0, [], None, None, [])
     # MA100이 계산된 마지막 행 확인
     if df_15m["ma_100"].isna().all():
-        return ("neutral", 0.0, 0.0, 0.0, 0.0, [], None, [])
+        return ("neutral", 0.0, 0.0, 0.0, 0.0, [], None, None, [])
     # 최근 REGIME_LOOKBACK_15M개 사용 (MA100이 계산된 행만)
     # 전체 데이터에서 MA100 계산 후, 최근 96개만 사용
     df_15m_valid = df_15m[df_15m["ma_100"].notna()]
     if len(df_15m_valid) < REGIME_LOOKBACK_15M:
-        return ("neutral", 0.0, 0.0, 0.0, 0.0, [], None, [])
+        return ("neutral", 0.0, 0.0, 0.0, 0.0, [], None, None, [])
     # 최근 24시간(REGIME_LOOKBACK_15M)만 사용
     df_15m_recent = df_15m_valid.tail(REGIME_LOOKBACK_15M).copy()
     last = df_15m_recent.iloc[-1]
@@ -105,6 +116,7 @@ def compute_regime_15m(df: pd.DataFrame, current_price: float) -> tuple:
     ma_50_15m = float(df_15m_recent.iloc[-1]["ma_50"])
     ma_100_15m = float(df_15m_recent.iloc[-1]["ma_100"])
     rsi_15m = float(df_15m_recent.iloc[-1]["rsi"])
+    rsi_15m_prev = float(df_15m_recent.iloc[-2]["rsi"]) if len(df_15m_recent) >= 2 else None
     # MA20 히스토리 (추세장 판단용) - 유효한 데이터에서 계산하되 최근 96개만 사용
     ma_long_history = df_15m_valid["ma_long"].tail(TREND_SLOPE_BARS).tolist()
     regime = detect_market_regime(
@@ -113,11 +125,14 @@ def compute_regime_15m(df: pd.DataFrame, current_price: float) -> tuple:
         price_history_15m, box_period=REGIME_LOOKBACK_15M,
         ma_long_history=ma_long_history,
     )
-    return (regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, ma_long_history)
+    return (regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, rsi_15m_prev, ma_long_history)
 
 
-def fetch_ohlcv_history(exchange, days: int = 365, batch_size: int = 1500) -> pd.DataFrame:
-    """과거 N일 5분봉 배치 수집."""
+def fetch_ohlcv_history(exchange, days: int = 365, batch_size: int = 1500, timeframe: str = TIMEFRAME) -> pd.DataFrame:
+    """과거 N일 OHLCV 배치 수집. timeframe 기본 5m, '1m' 지정 시 1분봉."""
+    if timeframe == "1m":
+        return _fetch_ohlcv_history_1m(exchange, days, batch_size)
+    # 5m
     target_candles = days * 24 * 12
     all_ohlcv = []
     current_end = int(time.time() * 1000)
@@ -145,6 +160,40 @@ def fetch_ohlcv_history(exchange, days: int = 365, batch_size: int = 1500) -> pd
     if not all_ohlcv:
         return pd.DataFrame()
     # 요청한 일수만큼만 사용 (최근 N일)
+    if len(all_ohlcv) > target_candles:
+        all_ohlcv = all_ohlcv[-target_candles:]
+    df = pd.DataFrame(all_ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+    return df.sort_values("timestamp").drop_duplicates(subset=["timestamp"]).reset_index(drop=True)
+
+
+def _fetch_ohlcv_history_1m(exchange, days: int, batch_size: int = 1000) -> pd.DataFrame:
+    """과거 N일 1분봉 배치 수집 (백테스트 1m 기준용)."""
+    target_candles = days * 24 * 60
+    all_ohlcv = []
+    current_end = int(time.time() * 1000)
+
+    for _ in range((target_candles + batch_size - 1) // batch_size):
+        try:
+            batch_start = current_end - (batch_size * 60 * 1000)
+            ohlcv = _fetch_ohlcv_with_retry(exchange, SYMBOL, "1m", batch_size, since=batch_start)
+            if not ohlcv:
+                break
+            if all_ohlcv:
+                existing = {c[0] for c in all_ohlcv}
+                ohlcv = [c for c in ohlcv if c[0] not in existing]
+            if ohlcv:
+                all_ohlcv.extend(ohlcv)
+                all_ohlcv.sort(key=lambda x: x[0])
+                current_end = all_ohlcv[0][0] - (60 * 1000)
+            time.sleep(0.1)
+            if len(all_ohlcv) >= target_candles:
+                break
+        except Exception:
+            break
+
+    if not all_ohlcv:
+        return pd.DataFrame()
     if len(all_ohlcv) > target_candles:
         all_ohlcv = all_ohlcv[-target_candles:]
     df = pd.DataFrame(all_ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])

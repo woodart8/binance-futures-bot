@@ -323,13 +323,18 @@ def swing_strategy_signal(
     if regime == "neutral":
         return "hold"
 
+    # 횡보: 박스는 항상 15분봉(regime_price_history) 기준. 호출부에서 sideways일 때만 넘김.
+    if not regime_price_history or len(regime_price_history) < REGIME_LOOKBACK_15M:
+        return "hold"
+    ph = regime_price_history
+    period = REGIME_LOOKBACK_15M
+
     ma_short = regime_short_ma if regime_short_ma is not None else short_ma
     ma_long = regime_long_ma if regime_long_ma is not None else long_ma
-    ph = regime_price_history if regime_price_history else price_history
 
     if not has_position:
         if SIDEWAYS_ENABLED:
-            box = _validate_sideways_box(ph, price, period=REGIME_LOOKBACK_15M if regime_price_history else SIDEWAYS_BOX_PERIOD)
+            box = _validate_sideways_box(ph, price, period=period)
             if box:
                 _, _, _, pos = box
                 top = 1.0 - SIDEWAYS_BOX_TOP_MARGIN
@@ -341,7 +346,7 @@ def swing_strategy_signal(
                     return "short"
         return "hold"
 
-    box = calculate_box_range(ph or [], period=REGIME_LOOKBACK_15M if regime_price_history else SIDEWAYS_BOX_PERIOD)
+    box = calculate_box_range(ph, period=period)
     if box:
         h, l, r = box
         if r > 0:
@@ -484,10 +489,9 @@ def get_hold_reason(
             return f"중립: {', '.join(reasons)}"
         return "중립 (추세·횡보 아님, 진입 없음)"
 
-    ph = regime_price_history if regime_price_history else price_history
-    if not ph or len(ph) < (REGIME_LOOKBACK_15M if regime_price_history else SIDEWAYS_BOX_PERIOD):
+    if not regime_price_history or len(regime_price_history) < REGIME_LOOKBACK_15M:
         return "박스 계산용 가격 데이터 부족"
-    box = _validate_sideways_box(ph, price, period=REGIME_LOOKBACK_15M if regime_price_history else SIDEWAYS_BOX_PERIOD)
+    box = _validate_sideways_box(regime_price_history, price, period=REGIME_LOOKBACK_15M)
     if not box:
         return "박스권 조건 미충족"
     box_high, box_low, box_range, pos = box
@@ -546,10 +550,9 @@ def get_entry_reason(
     if regime == "neutral":
         return "중립 (진입 없음)"
 
-    ph = regime_price_history if regime_price_history else price_history
-    if not ph:
+    if not regime_price_history or len(regime_price_history) < REGIME_LOOKBACK_15M:
         return f"횡보장 {side} (박스)"
-    box = _validate_sideways_box(ph, price, period=REGIME_LOOKBACK_15M if regime_price_history else SIDEWAYS_BOX_PERIOD)
+    box = _validate_sideways_box(regime_price_history, price, period=REGIME_LOOKBACK_15M)
     if not box:
         return f"횡보장 {side} (박스)"
     _, box_low, box_range, pos = box

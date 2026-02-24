@@ -1,7 +1,7 @@
 """실거래 에이전트. .env에 API_KEY, SECRET_KEY 필요.
 
-진입·청산은 백테스트와 동일: 새 5분봉이 데이터에 뜬 뒤, 방금 종료된 봉(전봉)의 종가로만 판단.
-같은 봉에서 청산한 경우 해당 봉에서는 재진입하지 않음.
+진입·청산: 새 1분봉이 생길 때마다 방금 종료된 1분봉 종가로 판단(백테스트 1m·페이퍼와 동일).
+장세/RSI는 1분봉을 5분봉으로 리샘플한 데이터 기준. 같은 1분봉에서 청산한 경우 해당 봉에서는 재진입하지 않음.
 """
 
 import sys
@@ -27,7 +27,7 @@ from config import (
     LIVE_CHECK_INTERVAL,
 )
 from exchange_client import get_private_exchange
-from data import fetch_ohlcv
+from data import fetch_ohlcv, resample_1m_to_5m
 from indicators import calculate_rsi, calculate_ma
 from logger import log
 
@@ -41,6 +41,9 @@ from trading_logic_live import (
 )
 
 OHLCV_CONSECUTIVE_FAILURE_LIMIT = 30
+# 1분봉 개수: 15분봉 100개(MA100) 확보용 1500봉 이상
+MIN_1M_BARS = 100 * 15
+LIMIT_1M = 2000
 
 
 def set_leverage_and_margin(exchange) -> None:
@@ -73,37 +76,36 @@ def main() -> None:
 
     state = init_live_state()
     ohlcv_failure_count = 0
-    # MA100은 15분봉 기준 100개 필요 = 5분봉 기준 300개
-    # REGIME_LOOKBACK_15M은 15분봉 기준 96개 = 5분봉 기준 288개
-    # 충분한 데이터 확보를 위해 여유분 추가
-    # MA100 계산 후 최근 96개 사용을 위해 최소 196개 15분봉 필요 = 588개 5분봉
-    # 충분한 데이터 확보를 위해 여유분 추가 (resample 후 데이터 손실 고려)
-    limit = (MA_LONGEST_PERIOD + REGIME_LOOKBACK_15M) * 3 + 200
 
     try:
         while True:
             try:
-                df = fetch_ohlcv(exchange, limit=limit)
+                df_1m = fetch_ohlcv(exchange, limit=LIMIT_1M, timeframe="1m")
                 ohlcv_failure_count = 0
             except Exception as e:
                 ohlcv_failure_count += 1
-                log(f"OHLCV 조회 실패 ({ohlcv_failure_count}/{OHLCV_CONSECUTIVE_FAILURE_LIMIT}): {e}", "ERROR")
+                log(f"OHLCV(1m) 조회 실패 ({ohlcv_failure_count}/{OHLCV_CONSECUTIVE_FAILURE_LIMIT}): {e}", "ERROR")
                 if ohlcv_failure_count >= OHLCV_CONSECUTIVE_FAILURE_LIMIT:
                     log(f"OHLCV 조회가 {OHLCV_CONSECUTIVE_FAILURE_LIMIT}회 연속 실패하여 프로세스를 종료합니다. 네트워크/API를 확인 후 재실행하세요.", "ERROR")
                     sys.exit(1)
                 time.sleep(60)
                 continue
 
-            df["rsi"] = calculate_rsi(df["close"], RSI_PERIOD)
-            df["ma_short"] = calculate_ma(df["close"], MA_SHORT_PERIOD)
-            df["ma_long"] = calculate_ma(df["close"], MA_LONG_PERIOD)
-            df["ma_50"] = calculate_ma(df["close"], MA_MID_PERIOD)
-            df["ma_100"] = calculate_ma(df["close"], MA_LONGEST_PERIOD)
-            df = df.dropna().reset_index(drop=True)
+            if df_1m.empty or len(df_1m) < 2:
+                time.sleep(LIVE_CHECK_INTERVAL)
+                continue
 
-            latest = df.iloc[-1]
-            latest_time = latest["timestamp"]
-            price = float(latest["close"])
+            df_5m = resample_1m_to_5m(df_1m)
+            df_5m["rsi"] = calculate_rsi(df_5m["close"], RSI_PERIOD)
+            df_5m["ma_short"] = calculate_ma(df_5m["close"], MA_SHORT_PERIOD)
+            df_5m["ma_long"] = calculate_ma(df_5m["close"], MA_LONG_PERIOD)
+            df_5m["ma_50"] = calculate_ma(df_5m["close"], MA_MID_PERIOD)
+            df_5m["ma_100"] = calculate_ma(df_5m["close"], MA_LONGEST_PERIOD)
+            df_5m = df_5m.dropna().reset_index(drop=True)
+
+            latest_1m = df_1m.iloc[-1]
+            latest_time = latest_1m["timestamp"]
+            price = float(latest_1m["close"])
 
             try:
                 ticker = exchange.fetch_ticker(SYMBOL)
@@ -115,17 +117,28 @@ def main() -> None:
             if state["last_candle_time"] is None:
                 state["last_candle_time"] = latest_time
                 try:
-                    bal = get_balance_usdt(exchange)  # 거래소 잔고(펀딩 포함)
+                    bal = get_balance_usdt(exchange)
                 except Exception:
                     bal = 0.0
                 log(f"[시작] 가격={price:.2f} 잔고={bal:.2f}")
-            elif latest_time > state["last_candle_time"] and len(df) >= 2:
-                # 백테스트와 동일: 새 봉이 뜬 뒤에는 방금 종료된 봉(전봉)의 종가로 진입·청산 판단
-                df_closed = df.iloc[:-1]  # 진행 중인 봉 제외, 전봉까지
-                bar_closed = df_closed.iloc[-1]  # 방금 종료된 봉
-                close_price = float(bar_closed["close"])
-                closed_this_candle = False  # 같은 봉에서 청산 시 해당 봉에서는 재진입 안 함 (백테스트와 동일)
-                # 1) 익절/손절/박스이탈 체크 (전봉 종가 기준)
+            elif latest_time > state["last_candle_time"] and len(df_1m) >= 2:
+                # 1분봉 기준: 방금 종료된 1분봉 종가로 진입·청산 판단. 장세/RSI는 5m 리샘플 데이터 사용
+                if len(df_5m) < REGIME_LOOKBACK_15M * 3 or len(df_1m) < MIN_1M_BARS:
+                    state["last_candle_time"] = latest_time
+                    time.sleep(LIVE_CHECK_INTERVAL)
+                    continue
+
+                df_closed_1m = df_1m.iloc[:-1]
+                bar_closed_1m = df_closed_1m.iloc[-1]
+                close_price = float(bar_closed_1m["close"])
+                bar_ts = pd.Timestamp(bar_closed_1m.get("timestamp"))
+                last_ct = state.get("last_candle_time")
+                delta_sec = (latest_time - last_ct).total_seconds() if last_ct else 300
+                is_5m_boundary = (delta_sec >= 120) or (bar_ts.minute % 5 == 4)
+
+                df_closed = df_5m  # 전략/장세는 5분봉(리샘플) 기준
+
+                closed_this_candle = False
                 if state.get("has_position"):
                     state, did_close = check_tp_sl_and_close(exchange, state, close_price, df_closed)
                     if did_close:
@@ -133,7 +146,6 @@ def main() -> None:
                         state["last_candle_time"] = latest_time
                         time.sleep(LIVE_CHECK_INTERVAL)
                         continue
-                # 2) 전략 신호 청산(flat) 및 5분봉 상태 처리 (전봉 기준)
                 if not closed_this_candle:
                     state, skip, did_close = process_live_candle(exchange, state, df_closed)
                     state["last_candle_time"] = latest_time
@@ -144,15 +156,16 @@ def main() -> None:
                         closed_this_candle = True
                         time.sleep(LIVE_CHECK_INTERVAL)
                         continue
-                # 3) 진입 (전봉 종가 기준) — 같은 봉에서 청산한 경우 이 봉에서는 진입하지 않음
                 if not closed_this_candle and not state.get("has_position"):
-                    state, did_enter = try_live_entry(exchange, state, df_closed, close_price)
+                    state, did_enter = try_live_entry(exchange, state, df_closed, close_price, log_hold_info=is_5m_boundary)
                     if did_enter:
+                        state["last_candle_time"] = latest_time
                         time.sleep(LIVE_CHECK_INTERVAL)
                         continue
-                # 5분 로그 (전봉 기준)
-                log_5m_status(exchange, state, df_closed)
+                if is_5m_boundary:
+                    log_5m_status(exchange, state, df_closed)
 
+                state["last_candle_time"] = latest_time
             time.sleep(LIVE_CHECK_INTERVAL)
 
     except KeyboardInterrupt:
