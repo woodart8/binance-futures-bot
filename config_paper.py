@@ -11,3 +11,4 @@ PAPER_BALANCE_FILE = "paper_balance.json"
 # DAILY_LOSS_LIMIT_PCT = 5.0
 # CONSECUTIVE_LOSS_LIMIT = 4
 # INITIAL_BALANCE = 1000.0
+FEE_RATE = 0.003  # 모의투자 수수료 0.3% (1회당, 진입+청산 = 0.6%)
