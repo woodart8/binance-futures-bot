@@ -20,7 +20,6 @@ from config import (
     INITIAL_BALANCE,
     LEVERAGE,
     RSI_PERIOD,
-    TIMEFRAME,
     MA_LONGEST_PERIOD,
     REGIME_LOOKBACK_15M,
     MA_SHORT_PERIOD,
@@ -61,28 +60,28 @@ def main() -> None:
     log(f"시작 잔고={INITIAL_BALANCE:.2f}")
 
     last_candle_time = None
-    # MA100은 15분봉 기준 100개 필요 = 5분봉 기준 300개
-    # REGIME_LOOKBACK_15M은 15분봉 기준 96개 = 5분봉 기준 288개
-    # MA100 계산 후 최근 96개 사용을 위해 최소 196개 15분봉 필요 = 588개 5분봉
-    # 충분한 데이터 확보를 위해 여유분 추가 (resample 후 데이터 손실 고려)
-    limit = (MA_LONGEST_PERIOD + REGIME_LOOKBACK_15M) * 3 + 200
+    # 1분봉 수집 후 5분봉으로 리샘플해 장세/RSI 사용. 15분봉 96개 확보용 1분봉 여유있게
+    limit_1m = (MA_LONGEST_PERIOD + REGIME_LOOKBACK_15M) * 3 + 500
 
     try:
         while True:
-            df = fetch_ohlcv(exchange, limit=limit)
+            df_1m = fetch_ohlcv(exchange, limit=limit_1m, timeframe="1m")
+            if df_1m.empty or len(df_1m) < 2:
+                time.sleep(CHECK_INTERVAL)
+                continue
 
-            df["rsi"] = calculate_rsi(df["close"], RSI_PERIOD)
-            df["ma_short"] = calculate_ma(df["close"], MA_SHORT_PERIOD)
-            df["ma_long"] = calculate_ma(df["close"], MA_LONG_PERIOD)
-            df["ma_50"] = calculate_ma(df["close"], MA_MID_PERIOD)
-            df["ma_100"] = calculate_ma(df["close"], MA_LONGEST_PERIOD)
-            df["volume_ma"] = df["volume"].rolling(window=20).mean()
+            df_5m = resample_1m_to_5m(df_1m)
+            df_5m["rsi"] = calculate_rsi(df_5m["close"], RSI_PERIOD)
+            df_5m["ma_short"] = calculate_ma(df_5m["close"], MA_SHORT_PERIOD)
+            df_5m["ma_long"] = calculate_ma(df_5m["close"], MA_LONG_PERIOD)
+            df_5m["ma_50"] = calculate_ma(df_5m["close"], MA_MID_PERIOD)
+            df_5m["ma_100"] = calculate_ma(df_5m["close"], MA_LONGEST_PERIOD)
+            df_5m["volume_ma"] = df_5m["volume"].rolling(window=20).mean()
+            df_5m = df_5m.dropna().reset_index(drop=True)
 
-            df = df.dropna().reset_index(drop=True)
-
-            latest = df.iloc[-1]
-            latest_time = latest["timestamp"]
-            price = float(latest["close"])
+            latest_1m = df_1m.iloc[-1]
+            latest_time = latest_1m["timestamp"]
+            price = float(latest_1m["close"])
 
             try:
                 ticker = exchange.fetch_ticker(SYMBOL)
@@ -106,28 +105,29 @@ def main() -> None:
                 )
                 total_pnl = state.equity - INITIAL_BALANCE  # 매매+펀딩 포함
                 log(f"시작 포지션={pos_status} 가격={current_price:.2f} 잔고={state.balance:.2f} PNL={total_pnl:+.2f}")
-            elif latest_time > last_candle_time and len(df) >= 2:
-                # 백테스트와 동일: 새 봉이 뜬 뒤에는 방금 종료된 봉(전봉)의 종가로 진입·청산 판단
-                df_closed = df.iloc[:-1]  # 진행 중인 봉 제외, 전봉까지
-                bar_closed = df_closed.iloc[-1]  # 방금 종료된 봉
-                price = float(bar_closed["close"])
-                # 정보 로그는 5분봉 생기는 시점에만 출력 (진입/청산 로그는 항상 바로 출력)
-                bar_ts = pd.Timestamp(bar_closed.get("timestamp"))
-                delta_sec = (latest_time - last_candle_time).total_seconds() if last_candle_time else 300
-                # 5분봉: 새 봉이 뜰 때마다 5분 경계 → 29분 실행 시 30분에 첫 [5분] 로그. 1분봉: minute % 5 == 4일 때만.
-                is_5m_boundary = (TIMEFRAME == "5m") or (delta_sec >= 120) or (bar_ts.minute % 5 == 4)
+            elif latest_time > last_candle_time and len(df_1m) >= 2:
+                # 1분봉 기준: 방금 종료된 1분봉 종가로 진입·청산 판단. 장세/RSI는 5분봉(리샘플) 기준
+                df_closed_1m = df_1m.iloc[:-1]
+                bar_closed_1m = df_closed_1m.iloc[-1]
+                price = float(bar_closed_1m["close"])
+                df_closed_5m = df_5m.iloc[:-1] if len(df_5m) >= 2 else df_5m
 
-                closed_this_candle = False  # 같은 봉에서 청산 시 해당 봉에서는 재진입 안 함 (백테스트와 동일)
+                if len(df_closed_5m) < REGIME_LOOKBACK_15M * 3:
+                    last_candle_time = latest_time
+                    time.sleep(CHECK_INTERVAL)
+                    continue
+
+                closed_this_candle = False  # 같은 봉에서 청산 시 해당 봉에서는 재진입 안 함
                 # 1) 익절/손절/박스이탈 체크 (전봉 종가 기준) — 청산 시 로그는 즉시 출력
                 if state.has_long_position or state.has_short_position:
-                    if check_scalp_stop_loss_and_profit(state, price, bar_closed, df_closed):
+                    if check_scalp_stop_loss_and_profit(state, price, bar_closed_1m, df_closed_5m):
                         closed_this_candle = True
                         last_candle_time = latest_time
                         time.sleep(CHECK_INTERVAL)
                         continue
                 # 2) 전략 신호 청산(flat) 및 로그 (전봉 기준) — 청산 시 로그는 즉시 출력
                 if not closed_this_candle:
-                    did_close = apply_strategy_on_candle(state, bar_closed, df_closed, log_hold_info=is_5m_boundary)
+                    did_close = apply_strategy_on_candle(state, bar_closed_1m, df_closed_5m, log_hold_info=False)
                     last_candle_time = latest_time
                     if did_close:
                         closed_this_candle = True
@@ -135,18 +135,16 @@ def main() -> None:
                         continue
                 # 3) 진입 (전봉 종가 기준) — 진입 시 로그는 즉시 출력
                 if not closed_this_candle and not (state.has_long_position or state.has_short_position):
-                    if try_paper_entry(state, df_closed, price):
+                    if try_paper_entry(state, df_closed_5m, price):
                         last_candle_time = latest_time
                         time.sleep(CHECK_INTERVAL)
                         continue
 
-                # 현재 장세 판단 및 상세 정보: 5분봉 생기는 시점에만 출력
+                # 상태 로그: 1분봉 생길 때마다 출력 (장세/RSI는 5분봉 기준)
                 regime_detail = ""
-                if len(df_closed) >= REGIME_LOOKBACK_15M * 3:
-                    regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, _, ma_long_history = compute_regime_15m(df_closed, price)
-                    
+                if len(df_closed_5m) >= REGIME_LOOKBACK_15M * 3:
+                    regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, _, ma_long_history = compute_regime_15m(df_closed_5m, price)
                     if regime == "trend":
-                        # 추세장: MA20 기울기 정보
                         if ma_long_history and len(ma_long_history) >= TREND_SLOPE_BARS:
                             recent_ma20 = ma_long_history[-TREND_SLOPE_BARS:]
                             ma20_start = recent_ma20[0]
@@ -156,7 +154,6 @@ def main() -> None:
                                 trend_dir = "상승" if slope_pct > 0 else "하락"
                                 regime_detail = f" | 추세장({trend_dir}): MA20 기울기 {slope_pct:+.2f}% (기준 ±{TREND_SLOPE_MIN_PCT}%)"
                     elif regime == "sideways":
-                        # 횡보장: 박스 정보
                         bounds = get_sideways_box_bounds(price_history_15m, REGIME_LOOKBACK_15M)
                         if bounds:
                             box_high, box_low = bounds
@@ -184,9 +181,8 @@ def main() -> None:
                 box_str = ""
                 if state.entry_regime == "sideways" and state.box_high > 0 and state.box_low > 0:
                     box_str = f" | 박스 하단={state.box_low:.2f} 상단={state.box_high:.2f}"
-                rsi = float(bar_closed["rsi"])
-                if is_5m_boundary:
-                    log(f"[5분] {pos_status}{regime_str}{box_str}{regime_detail} | 가격={price:.2f} RSI={rsi:.0f} 잔고={state.balance:.2f} PNL={total_pnl:+.2f}{extra}")
+                rsi = float(df_closed_5m.iloc[-1]["rsi"]) if len(df_closed_5m) > 0 else 0
+                log(f"[1분] {pos_status}{regime_str}{box_str}{regime_detail} | 가격={price:.2f} RSI={rsi:.0f} 잔고={state.balance:.2f} PNL={total_pnl:+.2f}{extra}")
 
                 last_candle_time = latest_time
             time.sleep(CHECK_INTERVAL)

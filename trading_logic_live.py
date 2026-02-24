@@ -593,7 +593,7 @@ def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tu
 
 
 def log_5m_status(exchange, state: Dict[str, Any], df: pd.DataFrame) -> None:
-    """5분봉 상태 로그 (pos_status, regime, box, 가격, RSI, 잔고, 미실현)."""
+    """1분봉 생길 때마다 상태 로그 (pos_status, regime, box, 가격, RSI, 잔고, 미실현)."""
     latest = df.iloc[-1]
     price = float(latest["close"])
     rsi = float(latest["rsi"])
@@ -647,4 +647,4 @@ def log_5m_status(exchange, state: Dict[str, Any], df: pd.DataFrame) -> None:
     else:
         regime_detail = " | 중립: 데이터 부족"
     
-    log(f"[5분] {pos_status}{regime_str}{box_str}{regime_detail} | 가격={price:.2f} RSI={rsi:.0f} 잔고={bal:.2f}{unrealized}")
+    log(f"[1분] {pos_status}{regime_str}{box_str}{regime_detail} | 가격={price:.2f} RSI={rsi:.0f} 잔고={bal:.2f}{unrealized}")

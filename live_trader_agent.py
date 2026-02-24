@@ -131,11 +131,6 @@ def main() -> None:
                 df_closed_1m = df_1m.iloc[:-1]
                 bar_closed_1m = df_closed_1m.iloc[-1]
                 close_price = float(bar_closed_1m["close"])
-                bar_ts = pd.Timestamp(bar_closed_1m.get("timestamp"))
-                last_ct = state.get("last_candle_time")
-                delta_sec = (latest_time - last_ct).total_seconds() if last_ct else 300
-                is_5m_boundary = (delta_sec >= 120) or (bar_ts.minute % 5 == 4)
-
                 df_closed = df_5m  # 전략/장세는 5분봉(리샘플) 기준
 
                 closed_this_candle = False
@@ -157,13 +152,13 @@ def main() -> None:
                         time.sleep(LIVE_CHECK_INTERVAL)
                         continue
                 if not closed_this_candle and not state.get("has_position"):
-                    state, did_enter = try_live_entry(exchange, state, df_closed, close_price, log_hold_info=is_5m_boundary)
+                    state, did_enter = try_live_entry(exchange, state, df_closed, close_price, log_hold_info=False)
                     if did_enter:
                         state["last_candle_time"] = latest_time
                         time.sleep(LIVE_CHECK_INTERVAL)
                         continue
-                if is_5m_boundary:
-                    log_5m_status(exchange, state, df_closed)
+                # 상태 로그: 1분봉 생길 때마다 출력 (페이퍼와 동일)
+                log_5m_status(exchange, state, df_closed)
 
                 state["last_candle_time"] = latest_time
             time.sleep(LIVE_CHECK_INTERVAL)
