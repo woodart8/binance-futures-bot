@@ -43,7 +43,8 @@ from trading_logic_live import (
 OHLCV_CONSECUTIVE_FAILURE_LIMIT = 30
 # 1분봉 개수: 15분봉 100개(MA100) 확보용 1500봉 이상
 MIN_1M_BARS = 100 * 15
-LIMIT_1M = 2000
+# 15분봉 96개+MA100 확보: 15m 196개 이상 → 5m 588개 → 1m 2940개 이상
+LIMIT_1M = 3000
 
 
 def set_leverage_and_margin(exchange) -> None:

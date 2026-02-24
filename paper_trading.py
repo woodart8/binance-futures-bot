@@ -60,8 +60,8 @@ def main() -> None:
     log(f"시작 잔고={INITIAL_BALANCE:.2f}")
 
     last_candle_time = None
-    # 1분봉 수집 후 5분봉 리샘플. len(df_closed_5m) >= REGIME_LOOKBACK_15M*3(288) 필요 → 5분봉 288개 = 1분봉 1440개 이상
-    limit_1m = 2000
+    # 15분봉 96개+MA100 확보: 15m 196개 이상 → 5m 588개 → 1m 2940개 이상 (2000이면 유효 15m 부족해 항상 중립)
+    limit_1m = 3000
 
     try:
         while True:
