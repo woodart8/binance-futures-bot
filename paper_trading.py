@@ -20,6 +20,7 @@ from config import (
     INITIAL_BALANCE,
     LEVERAGE,
     RSI_PERIOD,
+    TIMEFRAME,
     MA_LONGEST_PERIOD,
     REGIME_LOOKBACK_15M,
     MA_SHORT_PERIOD,
@@ -113,7 +114,8 @@ def main() -> None:
                 # 정보 로그는 5분봉 생기는 시점에만 출력 (진입/청산 로그는 항상 바로 출력)
                 bar_ts = pd.Timestamp(bar_closed.get("timestamp"))
                 delta_sec = (latest_time - last_candle_time).total_seconds() if last_candle_time else 300
-                is_5m_boundary = (delta_sec >= 120) or (bar_ts.minute % 5 == 4)
+                # 5분봉: 새 봉이 뜰 때마다 5분 경계 → 29분 실행 시 30분에 첫 [5분] 로그. 1분봉: minute % 5 == 4일 때만.
+                is_5m_boundary = (TIMEFRAME == "5m") or (delta_sec >= 120) or (bar_ts.minute % 5 == 4)
 
                 closed_this_candle = False  # 같은 봉에서 청산 시 해당 봉에서는 재진입 안 함 (백테스트와 동일)
                 # 1) 익절/손절/박스이탈 체크 (전봉 종가 기준) — 청산 시 로그는 즉시 출력
