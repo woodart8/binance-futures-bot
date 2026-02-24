@@ -596,7 +596,7 @@ def log_5m_status(exchange, state: Dict[str, Any], df: pd.DataFrame) -> None:
     """1분봉 생길 때마다 상태 로그 (pos_status, regime, box, 가격, RSI, 잔고, 미실현)."""
     latest = df.iloc[-1]
     price = float(latest["close"])
-    rsi = float(latest["rsi"])
+    rsi_5m = float(latest["rsi"])
     has_position = state["has_position"]
     is_long = state["is_long"]
     entry_price = state["entry_price"]
@@ -620,6 +620,7 @@ def log_5m_status(exchange, state: Dict[str, Any], df: pd.DataFrame) -> None:
     
     # 현재 장세 판단 및 상세 정보 계산
     regime_detail = ""
+    rsi_15m = None
     if len(df) >= REGIME_LOOKBACK_15M * 3:
         regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, rsi_15m_prev, ma_long_history = compute_regime_15m(df, price)
         
@@ -646,5 +647,7 @@ def log_5m_status(exchange, state: Dict[str, Any], df: pd.DataFrame) -> None:
             regime_detail = " | 중립"
     else:
         regime_detail = " | 중립: 데이터 부족"
-    
-    log(f"[1분] {pos_status}{regime_str}{box_str}{regime_detail} | 가격={price:.2f} RSI={rsi:.0f} 잔고={bal:.2f}{unrealized}")
+
+    # RSI 표시는 15분봉 기준(rsi_15m)이 있으면 그 값을, 없으면 5분봉 RSI를 사용
+    rsi_display = float(rsi_15m) if rsi_15m is not None else rsi_5m
+    log(f"[1분] {pos_status}{regime_str}{box_str}{regime_detail} | 가격={price:.2f} RSI={rsi_display:.0f} 잔고={bal:.2f}{unrealized}")

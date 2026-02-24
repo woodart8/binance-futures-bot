@@ -333,8 +333,8 @@ def print_detailed_trade_analysis(result: BacktestResult, df: pd.DataFrame, top_
         kr = REGIME_KR.get(key[0], key[0])
         print(f"  {kr} + {key[1]}: {pnl:+.2f} USDT")
 
-def run_and_analyze(days: int = 600, use_1m: bool = True) -> None:
-    """use_1m=True면 1분봉 기준 백테스트(매 1분 진입/청산 판단), False면 5분봉 기준."""
+def run_and_analyze(days: int = 600, use_1m: bool = False) -> None:
+    """기본은 5분봉 기준 백테스트. use_1m=True면 1분봉 기준(매 1분 진입/청산 판단)."""
     if use_1m:
         print(f"1분봉 {days}일치 데이터 수집 중...")
         exchange = get_public_exchange()
@@ -432,9 +432,6 @@ def run_and_analyze(days: int = 600, use_1m: bool = True) -> None:
     for reason, d in sorted(reason_stats.items(), key=lambda x: -x[1]["count"]):
         wr = (d["wins"] / d["count"] * 100) if d["count"] > 0 else 0
         print(f"  {reason}: {d['count']}회, 승률 {wr:.1f}%, 손익 {d['total_pnl']:+.2f}")
-
-    # 날짜별 잔고 변화
-    _print_daily_balance(result, df)
 
     # 상세 거래 분석
     print_detailed_trade_analysis(result, df, top_n=10)

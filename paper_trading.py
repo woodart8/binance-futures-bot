@@ -1,7 +1,8 @@
 """페이퍼 트레이딩. python paper_trading.py
 
-진입·청산 판단: 새 1분봉이 생길 때마다, 방금 종료된 1분봉 종가로 판단. 장세/RSI는 1분봉을 5분봉으로 리샘플한 데이터 기준.
-같은 1분봉에서 청산한 경우 해당 봉에서는 재진입하지 않음.
+진입·청산 판단: 새 1분봉이 생길 때마다, 방금 종료된 1분봉 종가로 판단.
+장세/RSI/MA: 1분봉을 5분봉으로 리샘플한 뒤 15분봉으로 다시 리샘플해 계산(15m RSI 기간 12, MA7/20/50/100).
+같은 1분봉에서 청산한 경우 해당 봉에서는 재진입하지 않음. 상태 로그(`[1분] ...`)는 새 1분봉마다, 내용은 15분봉 장세/RSI/MA 기준.
 """
 
 import sys
@@ -143,8 +144,9 @@ def main() -> None:
                         time.sleep(CHECK_INTERVAL)
                         continue
 
-                # 상태 로그: 1분봉 생길 때마다 출력 (장세/RSI는 5분봉 기준)
+                # 상태 로그: 1분봉 생길 때마다 출력 (장세/RSI는 15분봉 기준으로 표시)
                 regime_detail = ""
+                rsi_15m = None
                 if len(df_closed_5m) >= REGIME_LOOKBACK_15M * 3:
                     regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, _, ma_long_history = compute_regime_15m(df_closed_5m, price)
                     if regime == "trend":
@@ -184,8 +186,10 @@ def main() -> None:
                 box_str = ""
                 if state.entry_regime == "sideways" and state.box_high > 0 and state.box_low > 0:
                     box_str = f" | 박스 하단={state.box_low:.2f} 상단={state.box_high:.2f}"
-                rsi = float(df_closed_5m.iloc[-1]["rsi"]) if len(df_closed_5m) > 0 else 0
-                log(f"[1분] {pos_status}{regime_str}{box_str}{regime_detail} | 가격={price:.2f} RSI={rsi:.0f} 잔고={state.balance:.2f} PNL={total_pnl:+.2f}{extra}")
+                # RSI 표시는 15분봉 기준(rsi_15m)이 있으면 그 값을, 없으면 5분봉 RSI를 사용
+                rsi_5m = float(df_closed_5m.iloc[-1]["rsi"]) if len(df_closed_5m) > 0 else 0
+                rsi_display = float(rsi_15m) if rsi_15m is not None else rsi_5m
+                log(f"[1분] {pos_status}{regime_str}{box_str}{regime_detail} | 가격={price:.2f} RSI={rsi_display:.0f} 잔고={state.balance:.2f} PNL={total_pnl:+.2f}{extra}")
 
                 last_candle_time = latest_time
             time.sleep(CHECK_INTERVAL)

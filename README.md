@@ -1,7 +1,7 @@
 # Binance Futures Bot
 
 바이낸스 USDT-M 선물 **횡보장 박스 단타** + **추세장 추세추종 단타** 전략입니다.  
-진입·청산은 **1분봉**이 닫힐 때마다 판단하고, 장세·RSI·MA는 **15분봉** 기준입니다.
+진입·청산은 **1분봉**이 닫힐 때마다 판단하고, 장세·RSI·MA는 **15분봉 RSI(기간 12)** 기준입니다.
 
 ---
 
@@ -25,7 +25,7 @@
 - **데이터**: 실거래/페이퍼는 1분봉 수집 후 5분봉으로 리샘플해 15분봉 장세·RSI·MA 계산에 사용.
 - **새 봉 감지**: 1분봉 OHLCV의 마지막 봉 시각이 이전 처리 시각보다 클 때 "새 봉"으로 간주. 그때 **방금 종료된 1분봉**의 종가로 익절/손절/전략 청산/진입 수행.
 - **같은 봉 재진입**: 청산한 1분봉에서는 당 봉 내 재진입 없음.
-- **로그**: 진입·청산 로그는 즉시 출력, 상태/정보 로그([5분] 등)는 5분봉이 닫힐 때마다 출력.
+- **로그**: 진입·청산 로그는 즉시 출력, **상태 로그(`[1분] ...`)는 새 1분봉이 생길 때마다 출력**(내용은 15분봉 장세·RSI·MA 기준).
 
 ---
 
@@ -34,7 +34,7 @@
 | 용도              | 타임프레임 | 비고                                           |
 |-------------------|------------|------------------------------------------------|
 | 장세 판별         | 15분봉     | 박스 여부, 추세 방향 (96봉 = 24시간)          |
-| RSI·MA(진입/청산) | 15분봉     | MA7, MA20, MA50, MA100, RSI(12) — 전략 전부 15m |
+| RSI·MA(진입/청산) | 15분봉     | MA7, MA20, MA50, MA100, RSI(12) — 전략 전부 15m(1m→5m→15m 리샘플) |
 | 진입/청산 **시점**| 1분봉      | 매 1분봉 종가로 TP/SL/전략 신호 판단          |
 | 중간 리샘플       | 5분봉      | 1m→5m 리샘플 후 15m 계산용으로만 사용         |
 
@@ -77,13 +77,13 @@
 
 ### 4.2 진입 조건
 
-**상승장:**
-- **롱**: `가격 ≤ MA20` + `RSI ≤ 40` (설정값). 옵션으로 **RSI 상승 전환**(전봉 대비 RSI 상승) 시에만 진입해 조정 초반 롱을 줄임. (`config_common`: `TREND_UPTREND_LONG_RSI_MAX`, `TREND_UPTREND_LONG_ENABLED`, `TREND_UPTREND_LONG_REQUIRE_RSI_TURNUP`)
+**상승장 (15분봉 RSI(12) 기준):**
+- **롱**: `가격 ≤ MA20` + `RSI ≤ 42` (설정값). 옵션으로 **RSI 상승 전환**(전봉 대비 RSI 상승) 시에만 진입해 조정 초반 롱을 줄임. (`config_common`: `TREND_UPTREND_LONG_RSI_MAX`, `TREND_UPTREND_LONG_ENABLED`, `TREND_UPTREND_LONG_REQUIRE_RSI_TURNUP`)
 - **숏**: `가격 ≥ MA20` + `RSI ≥ 80`
 
-**하락장:**
+**하락장 (15분봉 RSI(12) 기준):**
 - **롱**: `가격 ≤ MA20` + `RSI ≤ 20`
-- **숏**: `가격 ≥ MA20` + `RSI ≥ 62` (설정값). 옵션으로 **RSI 꺾임**(전봉 대비 RSI 하락) 시에만 진입해 반등 초반 숏을 줄임. (`config_common`: `TREND_DOWNTREND_SHORT_RSI_MIN`, `TREND_DOWNTREND_SHORT_ENABLED`, `TREND_DOWNTREND_SHORT_REQUIRE_RSI_TURNDOWN`)
+- **숏**: `가격 ≥ MA20` + `RSI ≥ 58` (설정값). 옵션으로 **RSI 꺾임**(전봉 대비 RSI 하락) 시에만 진입해 반등 초반 숏을 줄임. (`config_common`: `TREND_DOWNTREND_SHORT_RSI_MIN`, `TREND_DOWNTREND_SHORT_ENABLED`, `TREND_DOWNTREND_SHORT_REQUIRE_RSI_TURNDOWN`)
 
 ### 4.3 청산 조건
 
@@ -118,7 +118,7 @@
 - **exit_logic_paper.py** / **exit_logic_live.py** — 목표익절·손절·스탑로스·박스 이탈(상·하단 0.5% 돌파) 청산  
 - **funding.py** — 펀딩 레이트 조회, 00/08/16 UTC 정산·손익 계산  
 - **config_common.py** / **config_paper.py** / **config_live.py** — 공통·페이퍼·실거래 설정. 횡보장 박스 진입 범위(하단/상단 3%, `SIDEWAYS_BOX_TOP_MARGIN`/`SIDEWAYS_BOX_BOTTOM_MARGIN`), 박스 폭 최소 1.8%(`SIDEWAYS_BOX_RANGE_PCT_MIN`), 레버리지·포지션 비율(마진×레버=노션널), 추세장 진입(상승장 롱 RSI 40/터닝, 하락장 숏 RSI 62/꺾임), 일일·연속 손실 한도 등은 `config_common`에서 정의하며, `config_live`에서 실거래만 override 가능.  
-- **backtest.py** / **analyze_backtest.py** — 백테스트 및 장별 분석. 기본은 **1분봉** 기준(`candle_tf='1m'`). 5분봉은 `run_backtest(df, candle_tf='5m')` 또는 `analyze_backtest.run_and_analyze(..., use_1m=False)`. 펀딩 옵션: `exchange` 인자.  
+- **backtest.py** / **analyze_backtest.py** — 백테스트 및 장별 분석. 기본은 **5분봉** 기준(`candle_tf='5m'`, `run_and_analyze(..., use_1m=False)`). 1분봉 기반 세밀 백테스트는 필요 시 `candle_tf='1m'` 또는 `run_and_analyze(..., use_1m=True)`로 선택. 펀딩 옵션: `exchange` 인자.  
 - **trade_logger.py** — 매매 기록 `trades_log.csv`, 펀딩 기록 `funding_log.csv` (meta 필드는 JSON 형식)  
 - **daily_report.py** — 일일 매매 결과 리포트 이메일 전송 (`trades_log.csv` 기반, 전날 거래 내역 요약)  
 - **data.py** — OHLCV 데이터 수집 및 장세 계산 (MA100 계산을 위해 충분한 데이터 확보 후 최근 24시간만 사용)  

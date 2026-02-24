@@ -1,6 +1,6 @@
 """공통 전략/지표 설정. config_paper / config_live 에서 import 후 필요 시 override.
 
-추세장: 상승장 롱 RSI≤40+옵션(RSI 상승 전환), 하락장 숏 RSI≥62+옵션(RSI 꺾임).
+추세장: 상승장 롱 RSI≤42+옵션(RSI 상승 전환), 하락장 숏 RSI≥58+옵션(RSI 꺾임) — 모두 15분봉 RSI(기간 12) 기준.
 당일 진입 중단: 일일 손실 한도(%), 연속 손실 횟수. 당일 시작 잔고는 날짜 변경 후 첫 체크 시점 잔고.
 """
 
@@ -31,13 +31,13 @@ TREND_PROFIT_TARGET = 5.5
 TREND_STOP_LOSS = 2.5
 TREND_STOP_LOSS_PRICE = 2.5
 # 상승장 진입 조건 (이상/이하 조건)
-TREND_UPTREND_LONG_RSI_MAX = 40  # 상승장 롱: RSI ≤ 40 (조정 초반 롱 방지, 48→40)
+TREND_UPTREND_LONG_RSI_MAX = 42  # 상승장 롱: RSI ≤ 42 (기존 40보다 약간 완화)
 TREND_UPTREND_LONG_ENABLED = True  # False면 상승장에서 롱 진입 안 함
 TREND_UPTREND_LONG_REQUIRE_RSI_TURNUP = True  # True면 RSI가 전봉 대비 상승할 때만 롱 (조정 exhaustion)
-TREND_UPTREND_SHORT_RSI_MIN = 80  # 상승장 숏: RSI ≥ 80
+TREND_UPTREND_SHORT_RSI_MIN = 80  # 상승장 숏: RSI ≥ 80 (원래값 유지)
 # 하락장 진입 조건 (이상/이하 조건)
-TREND_DOWNTREND_LONG_RSI_MAX = 20  # 하락장 롱: RSI ≤ 20
-TREND_DOWNTREND_SHORT_RSI_MIN = 62  # 하락장 숏: RSI ≥ 62 (반등 초반 숏 방지, 52→62 상향)
+TREND_DOWNTREND_LONG_RSI_MAX = 20  # 하락장 롱: RSI ≤ 20 (원래값 유지)
+TREND_DOWNTREND_SHORT_RSI_MIN = 58  # 하락장 숏: RSI ≥ 58 (기존 62보다 완화)
 TREND_DOWNTREND_SHORT_ENABLED = True  # False면 하락장에서 숏 진입 안 함
 TREND_DOWNTREND_SHORT_REQUIRE_RSI_TURNDOWN = True  # True면 RSI가 전봉 대비 꺾일 때만 숏 (반등 exhaustion)
 
