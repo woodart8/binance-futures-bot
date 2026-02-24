@@ -27,7 +27,7 @@ from config import (
     LIVE_CHECK_INTERVAL,
 )
 from exchange_client import get_private_exchange
-from data import fetch_ohlcv, resample_1m_to_5m
+from data import fetch_ohlcv_1m_min_bars, resample_1m_to_5m
 from indicators import calculate_rsi, calculate_ma
 from logger import log
 
@@ -80,7 +80,7 @@ def main() -> None:
     try:
         while True:
             try:
-                df_1m = fetch_ohlcv(exchange, limit=LIMIT_1M, timeframe="1m")
+                df_1m = fetch_ohlcv_1m_min_bars(exchange, min_bars=LIMIT_1M)
                 ohlcv_failure_count = 0
             except Exception as e:
                 ohlcv_failure_count += 1

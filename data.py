@@ -55,6 +55,30 @@ def fetch_ohlcv(exchange, limit: int = 400, symbol: str = SYMBOL, timeframe: str
     return df
 
 
+# 바이낸스는 요청당 최대 1000봉. 실거래/페이퍼에서 5분봉 288개(REGIME_LOOKBACK_15M*3) 확보하려면 1분봉 1500+ 필요.
+def fetch_ohlcv_1m_min_bars(exchange, min_bars: int = 2000, symbol: str = SYMBOL) -> pd.DataFrame:
+    """1분봉을 API 한도(1000)씩 나눠 요청해 최소 min_bars개 수집."""
+    batch = 1000
+    all_ohlcv = _fetch_ohlcv_with_retry(exchange, symbol, "1m", batch)
+    if not all_ohlcv:
+        return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+    while len(all_ohlcv) < min_bars:
+        since_ms = int(all_ohlcv[0][0]) - batch * 60 * 1000
+        older = _fetch_ohlcv_with_retry(exchange, symbol, "1m", batch, since=since_ms)
+        if not older:
+            break
+        existing_ts = {r[0] for r in all_ohlcv}
+        older = [r for r in older if r[0] not in existing_ts]
+        if not older:
+            break
+        all_ohlcv = older + all_ohlcv
+        all_ohlcv.sort(key=lambda x: x[0])
+        time.sleep(0.2)
+    df = pd.DataFrame(all_ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+    return df.sort_values("timestamp").drop_duplicates(subset=["timestamp"]).reset_index(drop=True)
+
+
 def resample_1m_to_5m(df_1m: pd.DataFrame) -> pd.DataFrame:
     """1분봉 DataFrame을 5분봉으로 리샘플. 컬럼: timestamp, open, high, low, close, volume."""
     if df_1m.empty:

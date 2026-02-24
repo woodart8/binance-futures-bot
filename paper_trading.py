@@ -35,7 +35,7 @@ from config import (
     SIDEWAYS_BOX_RANGE_MIN,
 )
 from exchange_client import get_public_exchange
-from data import fetch_ohlcv, compute_regime_15m, resample_1m_to_5m
+from data import fetch_ohlcv_1m_min_bars, compute_regime_15m, resample_1m_to_5m
 from indicators import calculate_rsi, calculate_ma
 from strategy_core import REGIME_KR, get_sideways_box_bounds
 from logger import log
@@ -65,7 +65,7 @@ def main() -> None:
 
     try:
         while True:
-            df_1m = fetch_ohlcv(exchange, limit=limit_1m, timeframe="1m")
+            df_1m = fetch_ohlcv_1m_min_bars(exchange, min_bars=limit_1m)
             if df_1m.empty or len(df_1m) < 2:
                 time.sleep(CHECK_INTERVAL)
                 continue
