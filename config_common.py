@@ -44,8 +44,8 @@ TREND_DOWNTREND_SHORT_REQUIRE_RSI_TURNDOWN = True  # True면 RSI가 전봉 대�
 # 횡보장 박스
 SIDEWAYS_ENABLED = True
 SIDEWAYS_BOX_PERIOD = 48
-SIDEWAYS_BOX_TOP_MARGIN = 0.04   # 박스 상단에서 4% 이내 진입(숏)
-SIDEWAYS_BOX_BOTTOM_MARGIN = 0.04  # 박스 하단에서 4% 이내 진입(롱)
+SIDEWAYS_BOX_TOP_MARGIN = 0.03   # 박스 상단에서 3% 이내 진입(숏)
+SIDEWAYS_BOX_BOTTOM_MARGIN = 0.03  # 박스 하단에서 3% 이내 진입(롱)
 SIDEWAYS_MIN_TOUCHES = 2
 SIDEWAYS_BOX_TOUCH_GAP_MIN_HOURS = 2  # 박스 상단 두 봉·하단 두 봉 간 최소 간격(시간)
 SIDEWAYS_BOX_SLOPE_DIFF_MAX = 0.005  # 상단 두 봉 기울기와 하단 두 봉 기울기 차이 한도(box_low 대비 봉당)

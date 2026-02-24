@@ -258,7 +258,7 @@ def run_backtest(df: pd.DataFrame, exchange=None) -> BacktestResult:
         long_ma = float(row["ma_long"])
         ma_50 = float(row.get("ma_50", 0.0))
         ma_100 = float(row.get("ma_100", 0.0))
-        # 장세: 15분봉 24시간 기준 (박스권=하단/상단 4% 진입, 추세장=MA20 기울기 ±2.5% 초과 시 진입)
+        # 장세: 15분봉 24시간 기준 (박스권=하단/상단 3% 진입, 추세장=MA20 기울기 ±2.5% 초과 시 진입)
         n_15m = len(closes_15m)
         short_ma_15m, long_ma_15m, price_history_15m = 0.0, 0.0, []
         ma_50_15m, ma_100_15m = 0.0, 0.0
@@ -371,7 +371,7 @@ def run_backtest(df: pd.DataFrame, exchange=None) -> BacktestResult:
         daily_limit_hit = daily_loss_pct >= DAILY_LOSS_LIMIT_PCT
         consecutive_limit_hit = consecutive_loss_count >= CONSECUTIVE_LOSS_LIMIT
         
-        # 전략 시그널 생성 (횡보: 박스 하단/상단 4% 진입 MA무관, 추세: MA20 기울기 ±2.5% 초과 시 가격·RSI 조건 진입)
+        # 전략 시그널 생성 (횡보: 박스 하단/상단 3% 진입 MA무관, 추세: MA20 기울기 ±2.5% 초과 시 가격·RSI 조건 진입)
         use_15m_sideways = n_15m >= REGIME_LOOKBACK_15M and len(price_history_15m) >= REGIME_LOOKBACK_15M
         use_15m_trend = regime == "trend" and n_15m >= REGIME_LOOKBACK_15M
         rsi_prev = float(df.iloc[i - 1]["rsi"]) if i > 0 else None
