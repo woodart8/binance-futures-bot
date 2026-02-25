@@ -27,6 +27,8 @@ from config import (
     TREND_STOP_LOSS_PRICE,
     TREND_SLOPE_BARS,
     TREND_SLOPE_MIN_PCT,
+    COUNTER_TREND_PROFIT_TARGET,
+    COUNTER_TREND_STOP_LOSS_PRICE,
     SIDEWAYS_BOX_EXIT_MARGIN_PCT,
     MA_LONG_PERIOD,
     MA_MID_PERIOD,
@@ -375,8 +377,14 @@ def sync_state_from_exchange(exchange, state: Dict[str, Any]) -> Dict[str, Any]:
             if existing_sl:
                 sl_oid = existing_sl
             is_trend = entry_regime == "trend"
-            tp_pct = TREND_PROFIT_TARGET if is_trend else SIDEWAYS_PROFIT_TARGET
-            sl_pct = TREND_STOP_LOSS_PRICE if is_trend else SIDEWAYS_STOP_LOSS_PRICE
+            entry_trend_dir = state.get("entry_trend_direction", "")
+            if is_trend and entry_trend_dir in ("up", "down"):
+                is_counter = (is_long and entry_trend_dir == "down") or (not is_long and entry_trend_dir == "up")
+                tp_pct = COUNTER_TREND_PROFIT_TARGET if is_counter else TREND_PROFIT_TARGET
+                sl_pct = COUNTER_TREND_STOP_LOSS_PRICE if is_counter else TREND_STOP_LOSS_PRICE
+            else:
+                tp_pct = TREND_PROFIT_TARGET if is_trend else SIDEWAYS_PROFIT_TARGET
+                sl_pct = TREND_STOP_LOSS_PRICE if is_trend else SIDEWAYS_STOP_LOSS_PRICE
             added = []
             if not tp_oid:
                 tp_oid = _place_tp_order(exchange, SYMBOL, is_long, contracts, entry_price, tp_pct)
@@ -1044,6 +1052,7 @@ def log_5m_status(exchange, state: Dict[str, Any], df: pd.DataFrame) -> None:
     rsi_5m = float(latest["rsi"])
     has_position = state["has_position"]
     entry_regime = state["entry_regime"]
+    entry_trend_direction = state.get("entry_trend_direction", "")
     box_high_entry = state["box_high_entry"]
     box_low_entry = state["box_low_entry"]
 
@@ -1066,8 +1075,13 @@ def log_5m_status(exchange, state: Dict[str, Any], df: pd.DataFrame) -> None:
         pnl_pct = (price - entry_price) / entry_price * LEVERAGE * 100 if is_long else (entry_price - price) / entry_price * LEVERAGE * 100
         unrealized = f" 미실현={pnl_pct:+.2f}%"
         is_trend = entry_regime == "trend"
-        tp_pct = TREND_PROFIT_TARGET if is_trend else SIDEWAYS_PROFIT_TARGET
-        sl_pct = TREND_STOP_LOSS_PRICE if is_trend else SIDEWAYS_STOP_LOSS_PRICE
+        if is_trend and entry_trend_direction in ("up", "down"):
+            is_counter = (is_long and entry_trend_direction == "down") or (not is_long and entry_trend_direction == "up")
+            tp_pct = COUNTER_TREND_PROFIT_TARGET if is_counter else TREND_PROFIT_TARGET
+            sl_pct = COUNTER_TREND_STOP_LOSS_PRICE if is_counter else TREND_STOP_LOSS_PRICE
+        else:
+            tp_pct = TREND_PROFIT_TARGET if is_trend else SIDEWAYS_PROFIT_TARGET
+            sl_pct = TREND_STOP_LOSS_PRICE if is_trend else SIDEWAYS_STOP_LOSS_PRICE
         pct_per_leverage = 1.0 / LEVERAGE
         if is_long:
             tg = entry_price * (1 + tp_pct / 100 * pct_per_leverage)
