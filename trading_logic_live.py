@@ -1,9 +1,9 @@
 """실거래 전용 전략/청산/진입 로직. live_trader_agent.py에서만 사용.
 
 - 잔고: get_balance_usdt는 total 기준. 청산은 포지션 매칭 후 contracts>0일 때만 API 호출.
-- 포지션 동기화: sync_state_from_exchange로 시작 시·매 루프 거래소 실제 포지션과 state 일치(로그와 실제 포지션 불일치 방지).
-- 거래소 TP/SL: USE_EXCHANGE_TP_SL=True면 진입 직후 익절=지정가(LIMIT) reduceOnly, 손절=STOP_MARKET. 익절/손절가는 실제 포지션 체결가 기준.
-- 로그 기준: 진입 로그(가격·목표가·손절가)는 체결가 기준. 청산 로그(진입가·수익률·손익)와 [1분] 상태 로그(진입가·목표가·손절가·미실현)는 청산/로그 시점에 fetch_positions로 조회한 실제 포지션 기준.
+- 포지션 동기화: sync_state_from_exchange로 시작 시·매 루프 거래소 실제 포지션과 state 일치.
+- 거래소 익절/손절: USE_EXCHANGE_TP_SL=True면 진입 직후 익절=지정가(LIMIT) reduceOnly, 손절=STOP_MARKET. 가격은 체결가 기준. 거래소에서 체결되면 동기화 시 청산 로그·CSV 기록.
+- 로그 기준: 진입·청산·[1분] 상태 로그의 진입가/목표가/손절가/PnL은 거래소 실제 포지션(또는 체결가) 기준.
 """
 
 import time
@@ -65,7 +65,7 @@ def _fetch_open_algo_orders(exchange, symbol: str) -> list:
 
 
 def _get_existing_tp_sl_order_ids(exchange, symbol: str) -> Tuple[str, str]:
-    """거래소 미체결 주문에서 익절·손절 주문 ID 반환. 일반 openOrders + 조건부 openAlgoOrders 모두 확인. (tp_id, sl_id)."""
+    """거래소 미체결 주문에서 익절(limit reduceOnly)·손절(STOP_MARKET) 주문 ID 반환. openOrders + openAlgoOrders 확인. (익절_id, 손절_id)."""
     tp_id, sl_id = "", ""
     sym_norm = symbol.replace("/", "").replace(":USDT", "").upper()
 
@@ -85,16 +85,17 @@ def _get_existing_tp_sl_order_ids(exchange, symbol: str) -> Tuple[str, str]:
             if not oid:
                 continue
             reduce_only = o.get("reduceOnly") or o.get("info", {}).get("reduceOnly")
-            if "TAKE_PROFIT" in t or "TAKE_PROFIT" in info_type:
+            # 익절 = limit reduceOnly (TAKE_PROFIT 타입은 사용 안 함. 과거 주문 호환용으로만 검사)
+            if (t == "LIMIT" or info_type == "LIMIT") and reduce_only and not tp_id:
                 tp_id = str(oid)
-            elif (t == "LIMIT" or info_type == "LIMIT") and reduce_only and not tp_id:
-                tp_id = str(oid)  # 익절을 지정가 reduceOnly로 걸었을 때
+            elif "TAKE_PROFIT" in t or "TAKE_PROFIT" in info_type:
+                tp_id = str(oid)
             elif "STOP_MARKET" in t or info_type == "STOP_MARKET":
                 sl_id = str(oid)
     except Exception as e:
         log(f"미체결 주문 조회 실패: {e}", "WARNING")
 
-    # 2) 조건부(알고) 미체결 주문 (openAlgoOrders) — TP/SL이 여기 있을 수 있음
+    # 2) 조건부(알고) 미체결 주문 (openAlgoOrders) — 손절(STOP_MARKET)이 여기 있을 수 있음. 익절은 limit이라 openOrders에 있음.
     if not tp_id or not sl_id:
         algo_list = _fetch_open_algo_orders(exchange, symbol)
         for a in algo_list:
@@ -328,8 +329,9 @@ def init_live_state() -> Dict[str, Any]:
 def sync_state_from_exchange(exchange, state: Dict[str, Any]) -> Dict[str, Any]:
     """
     거래소 실제 포지션을 조회해 state를 맞춤. 재시작·수동 청산 등으로 로그와 실제가 어긋나는 것을 방지.
-    포지션을 처음 발견할 때(has_position이 False였다가 포지션 있음): USE_EXCHANGE_TP_SL이면 미체결 주문 조회 후 이미 있는 TP/SL은 유지, 없는 것만 추가 등록.
-    반환: 업데이트된 state (포지션 없으면 has_position=False, 있으면 entry_price 등 채움).
+    포지션을 처음 발견할 때: USE_EXCHANGE_TP_SL이면 익절(limit reduceOnly)·손절(STOP_MARKET) 미체결 조회 후 없는 것만 추가 등록.
+    포지션이 사라졌을 때(익절/손절 체결): 청산 로그 및 trades_log.csv 기록.
+    반환: 업데이트된 state.
     """
     try:
         positions = exchange.fetch_positions([SYMBOL])
