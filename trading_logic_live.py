@@ -1,6 +1,8 @@
 """실거래 전용 전략/청산/진입 로직. live_trader_agent.py에서만 사용.
 
-잔고: get_balance_usdt는 total 기준(손익·entry_balance 일관). 청산은 포지션 매칭 후 contracts>0일 때만 API 호출.
+- 잔고: get_balance_usdt는 total 기준. 청산은 포지션 매칭 후 contracts>0일 때만 API 호출.
+- 포지션 동기화: sync_state_from_exchange로 시작 시·매 루프 거래소 실제 포지션과 state 일치(로그와 실제 포지션 불일치 방지).
+- 거래소 TP/SL: USE_EXCHANGE_TP_SL=True면 진입 직후 TAKE_PROFIT_LIMIT(익절 지정가), STOP_MARKET(손절 시장가) 등록. 익절/손절은 거래소가 처리, 박스 이탈만 봇이 TP/SL 취소 후 시장가 청산.
 """
 
 import time
@@ -29,12 +31,57 @@ from config import (
     MA_LONGEST_PERIOD,
     SIDEWAYS_BOX_RANGE_PCT_MIN,
     SIDEWAYS_BOX_RANGE_MIN,
+    USE_EXCHANGE_TP_SL,
 )
 from data import compute_regime_15m
 from strategy_core import REGIME_KR, swing_strategy_signal, get_sideways_box_bounds
 from exit_logic import check_long_exit, check_short_exit, reason_to_display_message
 from trade_logger import log_trade
 from logger import log
+
+def _place_exchange_tp_sl(
+    exchange, symbol: str, is_long: bool, amount: float, entry_price: float, tp_pct: float, sl_pct: float
+) -> Tuple[str, str]:
+    """진입 후 거래소에 익절/손절 주문 등록. 반환: (tp_order_id, sl_order_id). 실패 시 (None, None)."""
+    pct_per_leverage = 1.0 / LEVERAGE
+    if is_long:
+        tp_price = entry_price * (1 + tp_pct / 100 * pct_per_leverage)
+        sl_price = entry_price * (1 - sl_pct / 100 * pct_per_leverage)
+        close_side = "sell"
+    else:
+        tp_price = entry_price * (1 - tp_pct / 100 * pct_per_leverage)
+        sl_price = entry_price * (1 + sl_pct / 100 * pct_per_leverage)
+        close_side = "buy"
+    tp_id, sl_id = None, None
+    try:
+        # 익절: 지정가(TAKE_PROFIT_LIMIT) — 목표가 도달 시 해당 가격에 limit 체결 (슬리피지 감소)
+        tp_order = exchange.create_order(
+            symbol, "TAKE_PROFIT_LIMIT", close_side, amount, tp_price, {"stopPrice": tp_price, "reduceOnly": True}
+        )
+        tp_id = tp_order.get("id") if isinstance(tp_order, dict) else None
+    except Exception as e:
+        log(f"익절 주문 등록 실패: {e}", "WARNING")
+    try:
+        sl_order = exchange.create_order(
+            symbol, "STOP_MARKET", close_side, amount, None, {"stopPrice": sl_price, "reduceOnly": True}
+        )
+        sl_id = sl_order.get("id") if isinstance(sl_order, dict) else None
+    except Exception as e:
+        log(f"손절 주문 등록 실패: {e}", "WARNING")
+    return (tp_id or "", sl_id or "")
+
+
+def _cancel_tp_sl_orders(exchange, symbol: str, state: Dict[str, Any]) -> None:
+    """박스 이탈 등으로 시장가 청산 전, 걸어둔 익절/손절 주문 취소."""
+    for key in ("tp_order_id", "sl_order_id"):
+        oid = state.get(key)
+        if not oid:
+            continue
+        try:
+            exchange.cancel_order(oid, symbol)
+        except Exception:
+            pass
+
 
 # 바이낸스 선물 fetch_positions 반환 symbol이 "BTC/USDT" 또는 "BTC/USDT:USDT" 등으로 올 수 있음
 def _position_matches(pos: dict, symbol: str, side: str) -> bool:
@@ -73,6 +120,77 @@ def init_live_state() -> Dict[str, Any]:
         "daily_start_date": "",
         "consecutive_loss_count": 0,
         "last_candle_time": None,
+        "tp_order_id": None,
+        "sl_order_id": None,
+    }
+
+
+def sync_state_from_exchange(exchange, state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    거래소 실제 포지션을 조회해 state를 맞춤. 재시작·수동 청산 등으로 로그와 실제가 어긋나는 것을 방지.
+    반환: 업데이트된 state (포지션 없으면 has_position=False, 있으면 entry_price 등 채움).
+    """
+    try:
+        positions = exchange.fetch_positions([SYMBOL])
+    except Exception as e:
+        log(f"포지션 동기화 조회 실패: {e}", "WARNING")
+        return state
+
+    for pos in positions:
+        if not _position_matches(pos, SYMBOL, "long") and not _position_matches(pos, SYMBOL, "short"):
+            continue
+        contracts = float(pos.get("contracts", 0) or 0)
+        if contracts <= 0:
+            contracts = abs(float(pos.get("positionAmt", 0) or pos.get("info", {}).get("positionAmt", 0) or 0))
+        if contracts <= 0:
+            continue
+        # 실제 포지션 있음
+        is_long = pos.get("side", "").lower() == "long"
+        entry_price = float(pos.get("entryPrice", 0) or pos.get("info", {}).get("entryPrice", 0) or 0)
+        if entry_price <= 0:
+            entry_price = float(pos.get("markPrice", 0) or pos.get("info", {}).get("markPrice", 0) or 0)
+        try:
+            balance = get_balance_usdt(exchange)
+        except Exception:
+            balance = state.get("entry_balance", 0.0)
+        # 실제 거래소 기준으로 state 덮어씀 (재시작·수동 진입 시 진입가만 알 수 있음)
+        highest = entry_price if is_long else (state.get("highest_price", 0) or 0)
+        if is_long and state.get("highest_price"):
+            highest = max(entry_price, state["highest_price"])
+        lowest = entry_price if not is_long else (state.get("lowest_price", float("inf")) if state.get("lowest_price") != float("inf") else float("inf"))
+        if not is_long and state.get("lowest_price") is not None and state.get("lowest_price") != float("inf"):
+            lowest = min(entry_price, state["lowest_price"])
+        state = {
+            **state,
+            "has_position": True,
+            "is_long": is_long,
+            "entry_price": entry_price,
+            "entry_balance": state.get("entry_balance") or balance,
+            "entry_regime": state.get("entry_regime") or "trend",
+            "box_high_entry": state.get("box_high_entry") or 0.0,
+            "box_low_entry": state.get("box_low_entry") or 0.0,
+            "highest_price": highest,
+            "lowest_price": lowest,
+            "best_pnl_pct": state.get("best_pnl_pct", 0.0),
+        }
+        return state
+
+    # 포지션 없음 → state도 포지션 없음으로
+    if state.get("has_position"):
+        log("[동기화] 거래소에 포지션 없음 — state를 포지션 없음으로 맞춤", "WARNING")
+    return {
+        **state,
+        "has_position": False,
+        "is_long": False,
+        "entry_price": 0.0,
+        "entry_regime": "",
+        "box_high_entry": 0.0,
+        "box_low_entry": 0.0,
+        "highest_price": 0.0,
+        "lowest_price": float("inf"),
+        "best_pnl_pct": 0.0,
+        "tp_order_id": None,
+        "sl_order_id": None,
     }
 
 
@@ -141,12 +259,19 @@ def check_tp_sl_and_close(exchange, state: Dict[str, Any], current_price: float,
             signal = "flat"
             close_reason = reason_to_display_message(reason, is_long=False)
 
+    # 거래소에 TP/SL 걸어둔 경우 익절·손절은 거래소가 처리, 봇은 박스 이탈만 시장가 청산
+    if signal == "flat" and USE_EXCHANGE_TP_SL and (state.get("tp_order_id") or state.get("sl_order_id")):
+        if "박스권" not in close_reason:
+            signal = None
+            close_reason = ""
+
     if signal != "flat":
         out = {**state, "highest_price": highest_price, "lowest_price": lowest_price, "best_pnl_pct": best_pnl_pct}
         return (out, False)
 
     if not close_reason:
         close_reason = "전략청산"
+    _cancel_tp_sl_orders(exchange, SYMBOL, state)
     try:
         balance = get_balance_usdt(exchange)
     except Exception as e:
@@ -227,6 +352,8 @@ def check_tp_sl_and_close(exchange, state: Dict[str, Any], current_price: float,
         "consecutive_loss_count": consecutive_loss_count,
         "daily_start_balance": daily_start_balance,
         "daily_start_date": daily_start_date,
+        "tp_order_id": None,
+        "sl_order_id": None,
     }
     return (new_state, True)
 
@@ -338,7 +465,12 @@ def try_live_entry(
             pct_per_leverage = 1.0 / LEVERAGE
             tg = current_price * (1 + tp_pct / 100 * pct_per_leverage)
             st = current_price * (1 - sl_pct / 100 * pct_per_leverage)
+            tp_oid, sl_oid = "", ""
+            if USE_EXCHANGE_TP_SL:
+                tp_oid, sl_oid = _place_exchange_tp_sl(exchange, SYMBOL, True, amount, current_price, tp_pct, sl_pct)
             entry_tp_sl = f" 목표가={tg:.2f} 손절가={st:.2f}"
+            if USE_EXCHANGE_TP_SL and (tp_oid or sl_oid):
+                entry_tp_sl += " (거래소 TP/SL 등록)"
             box_str = ""
             bounds = get_sideways_box_bounds(price_history_15m, REGIME_LOOKBACK_15M) if regime == "sideways" and use_15m and len(price_history_15m) >= REGIME_LOOKBACK_15M else None
             if bounds:
@@ -363,6 +495,8 @@ def try_live_entry(
                 "daily_start_date": daily_start_date,
                 "consecutive_loss_count": consecutive_loss_count,
                 "last_candle_time": latest_time,
+                "tp_order_id": tp_oid,
+                "sl_order_id": sl_oid,
             }
         else:
             exchange.create_market_sell_order(SYMBOL, amount)
@@ -373,7 +507,12 @@ def try_live_entry(
             pct_per_leverage = 1.0 / LEVERAGE
             tg = current_price * (1 - tp_pct / 100 * pct_per_leverage)
             st = current_price * (1 + sl_pct / 100 * pct_per_leverage)
+            tp_oid, sl_oid = "", ""
+            if USE_EXCHANGE_TP_SL:
+                tp_oid, sl_oid = _place_exchange_tp_sl(exchange, SYMBOL, False, amount, current_price, tp_pct, sl_pct)
             entry_tp_sl = f" 목표가={tg:.2f} 손절가={st:.2f}"
+            if USE_EXCHANGE_TP_SL and (tp_oid or sl_oid):
+                entry_tp_sl += " (거래소 TP/SL 등록)"
             box_str = ""
             bounds = get_sideways_box_bounds(price_history_15m, REGIME_LOOKBACK_15M) if regime == "sideways" and use_15m and len(price_history_15m) >= REGIME_LOOKBACK_15M else None
             if bounds:
@@ -398,6 +537,8 @@ def try_live_entry(
                 "daily_start_date": daily_start_date,
                 "consecutive_loss_count": consecutive_loss_count,
                 "last_candle_time": latest_time,
+                "tp_order_id": tp_oid,
+                "sl_order_id": sl_oid,
             }
         return (new_state, True)
     except Exception as e:
@@ -519,6 +660,7 @@ def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tu
             log(f"[청산실패] 포지션 미조회 contracts=0 (심볼/사이드: {SYMBOL} {side_to_close}) — API 청산 요청 안 감", "WARNING")
             return (state, False, False)
 
+        _cancel_tp_sl_orders(exchange, SYMBOL, state)
         try:
             if is_long:
                 exchange.create_market_sell_order(SYMBOL, contracts, {"reduceOnly": True})
@@ -575,6 +717,8 @@ def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tu
             "daily_start_balance": daily_start_balance,
             "daily_start_date": daily_start_date,
             "last_candle_time": latest_time,
+            "tp_order_id": None,
+            "sl_order_id": None,
         }
         return (new_state, False, True)
 

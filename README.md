@@ -87,10 +87,16 @@
 
 ### 4.3 청산 조건
 
-- **익절**: ROE(수익률) ≥ 5.5% (추세장), 2.5% (횡보장)
+- **익절**: ROE(수익률) ≥ 5.5% (추세장), 3.5% (횡보장)
 - **손절**: ROE ≤ -2.5% (추세장), -2% (횡보장)
-- **스탑로스**: 가격 기준 손실률 2.5% 도달 시
+- **스탑로스**: 가격 기준 손실률 2.5%(추세)/2%(횡보) 도달 시
 - **판단 시점**: 1분봉이 닫힌 뒤, **방금 종료된 1분봉 종가**로 체크. 실시간 ROE와 다를 수 있음.
+
+### 4.4 실거래: 거래소 익절/손절 미리 등록 (선택)
+
+- **`USE_EXCHANGE_TP_SL`**(`config_common`, 기본 True): 진입 직후 거래소에 **TAKE_PROFIT_LIMIT**(목표가 지정가)와 **STOP_MARKET**(손절가 시장가) 주문을 걸어 둠.
+- 익절·손절은 **거래소가 자동 체결**하고, **박스 이탈**만 봇이 시장가로 청산(기존 TP/SL 주문 취소 후 청산).
+- False면 기존처럼 봇이 1분봉마다 익절/손절 여부를 보고 시장가 청산.
 
 ---
 
@@ -113,11 +119,12 @@
 ## 6. 주요 파일
 
 - **paper_trading.py** — 페이퍼 트레이딩. 1분봉 수집 후 5m 리샘플, 새 1분봉 시 방금 종료된 1분봉 종가로 진입·청산.
-- **live_trader_agent.py** — 실거래. 1분봉 수집 후 5m 리샘플, 새 1분봉 시 방금 종료된 1분봉 종가로 진입·청산.
-- **strategy_core_paper.py** / **strategy_core_live.py** — 장세 판별, 진입 신호, 진입/보유 사유 문자열  
-- **exit_logic_paper.py** / **exit_logic_live.py** — 목표익절·손절·스탑로스·박스 이탈(상·하단 0.5% 돌파) 청산  
+- **live_trader_agent.py** — 실거래. 1분봉 수집 후 5m 리샘플, 새 1분봉 시 방금 종료된 1분봉 종가로 진입·청산. 시작 시·매 루프 **거래소 포지션 동기화**(`sync_state_from_exchange`)로 로그 포지션과 실제 포지션 일치.
+- **trading_logic_live.py** — 실거래 전용: 잔고/포지션 조회, 포지션 동기화, 진입 시 거래소 TP/SL 등록, 청산(박스 이탈 시 TP/SL 취소 후 시장가).
+- **strategy_core_paper.py** / **strategy_core_live.py** — 장세 판별, 진입 신호, 진입/보유 사유 문자열
+- **exit_logic_paper.py** / **exit_logic_live.py** — 목표익절·손절·스탑로스·박스 이탈(상·하단 0.5% 돌파) 청산
 - **funding.py** — 펀딩 레이트 조회, 00/08/16 UTC 정산·손익 계산  
-- **config_common.py** / **config_paper.py** / **config_live.py** — 공통·페이퍼·실거래 설정. 횡보장 박스 진입 범위(하단/상단 3%, `SIDEWAYS_BOX_TOP_MARGIN`/`SIDEWAYS_BOX_BOTTOM_MARGIN`), 박스 폭 최소 1.8%(`SIDEWAYS_BOX_RANGE_PCT_MIN`), 레버리지·포지션 비율(마진×레버=노션널), 추세장 진입(상승장 롱 RSI 40/터닝, 하락장 숏 RSI 62/꺾임), 일일·연속 손실 한도 등은 `config_common`에서 정의하며, `config_live`에서 실거래만 override 가능.  
+- **config_common.py** / **config_paper.py** / **config_live.py** — 공통·페이퍼·실거래 설정. `USE_EXCHANGE_TP_SL`(실거래 시 진입 후 거래소에 익절/손절 주문 등록 여부), 횡보장 박스 진입 범위(하단/상단 3%), 레버리지·포지션 비율, 추세장 진입(상승장 롱/숏, 하락장 롱/숏), 일일·연속 손실 한도 등. `config_live`에서 실거래만 override 가능.  
 - **backtest.py** / **analyze_backtest.py** — 백테스트 및 장별 분석. 기본은 **5분봉** 기준(`candle_tf='5m'`, `run_and_analyze(..., use_1m=False)`). 1분봉 기반 세밀 백테스트는 필요 시 `candle_tf='1m'` 또는 `run_and_analyze(..., use_1m=True)`로 선택. 펀딩 옵션: `exchange` 인자.  
 - **trade_logger.py** — 매매 기록 `trades_log.csv`, 펀딩 기록 `funding_log.csv` (meta 필드는 JSON 형식)  
 - **daily_report.py** — 일일 매매 결과 리포트 이메일 전송 (`trades_log.csv` 기반, 전날 거래 내역 요약)  

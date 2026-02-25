@@ -3,6 +3,7 @@
 진입·청산: 새 1분봉이 생길 때마다 방금 종료된 1분봉 종가로 판단(백테스트 1m·페이퍼와 동일).
 장세/RSI/MA: 1분봉을 5분봉으로 리샘플한 뒤 15분봉으로 다시 리샘플해 계산(15m RSI 기간 12, MA7/20/50/100).
 같은 1분봉에서 청산한 경우 해당 봉에서는 재진입하지 않음. 상태 로그(`[1분] ...`)는 새 1분봉마다, 내용은 15분봉 장세/RSI/MA 기준.
+포지션 동기화: 시작 시·매 루프 거래소 실제 포지션과 state 일치. USE_EXCHANGE_TP_SL=True면 진입 시 거래소에 익절/손절 주문 등록.
 """
 
 import sys
@@ -35,6 +36,7 @@ from logger import log
 from trading_logic_live import (
     get_balance_usdt,
     init_live_state,
+    sync_state_from_exchange,
     process_live_candle,
     log_5m_status,
     check_tp_sl_and_close,
@@ -77,6 +79,7 @@ def main() -> None:
     set_leverage_and_margin(exchange)
 
     state = init_live_state()
+    state = sync_state_from_exchange(exchange, state)  # 재시작 시 거래소 실제 포지션과 로그 상태 맞춤
     ohlcv_failure_count = 0
 
     try:
@@ -97,6 +100,7 @@ def main() -> None:
                 time.sleep(LIVE_CHECK_INTERVAL)
                 continue
 
+            state = sync_state_from_exchange(exchange, state)  # 매 루프마다 로그 포지션 = 실제 포지션 유지
             df_5m = resample_1m_to_5m(df_1m)
             df_5m["rsi"] = calculate_rsi(df_5m["close"], RSI_PERIOD)
             df_5m["ma_short"] = calculate_ma(df_5m["close"], MA_SHORT_PERIOD)
