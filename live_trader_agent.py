@@ -66,6 +66,13 @@ def set_leverage_and_margin(exchange) -> None:
                 "WARNING",
             )
             return
+        # -4067: 미체결 주문(TP/SL 등)이 있으면 포지션 사이드(원웨이/헷지) 변경 불가. 경고만 남기고 진행.
+        if "4067" in err or "position side" in err_lower and "open orders" in err_lower:
+            log(
+                "[레버리지/마진] 미체결 주문이 있어 설정 생략 (현재 설정 유지). TP/SL 청산 또는 수동 취소 후 재시작 시 적용. 원문: " + err[:200],
+                "WARNING",
+            )
+            return
         if "2015" in err_lower or "invalid api-key" in err_lower or "permissions" in err_lower:
             log(
                 "레버리지/마진 설정 실패 (-2015). 확인: 1) API 키 권한에 '선물' 체크 2) IP 제한 시 서버 IP 허용 3) 키/시크릿 재확인",
@@ -79,7 +86,14 @@ def main() -> None:
     set_leverage_and_margin(exchange)
 
     state = init_live_state()
-    state = sync_state_from_exchange(exchange, state)  # 재시작 시 거래소 실제 포지션과 로그 상태 맞춤
+    try:
+        state = sync_state_from_exchange(exchange, state)  # 재시작 시 거래소 실제 포지션과 로그 상태 맞춤
+    except Exception as e:
+        err = str(e)
+        if "4067" in err or ("position side" in err.lower() and "open orders" in err.lower()):
+            log("[시작] 미체결 주문으로 인한 API 제한 — 포지션 동기화 생략. 루프에서 재시도됩니다.", "WARNING")
+        else:
+            raise
     ohlcv_failure_count = 0
 
     try:
