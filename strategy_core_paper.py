@@ -5,11 +5,10 @@
 장세 이탈: 박스는 직전 봉까지로 계산해, 가격이 상·하단 0.5% 돌파 시 neutral(중립) 전환.
 
 추세장: MA20 기울기 ±2.5% 초과 시 상승/하락 판단.
-- 다이버전스: 5분봉 최근 구간에서 스윙 고점/저점(pivot)을 찾아, 두 피벗 간 가격·RSI 비교로 일반/히든 다이버전스 판정.
-- 상승장 롱: 가격 ≤ MA20 + RSI ≤ 40(설정) + 상승 다이버전스(일반/히든)
-- 상승장 숏: 가격 ≥ MA20 + RSI ≥ 80 + 하락 다이버전스(일반/히든)
-- 하락장 롱: 가격 ≤ MA20 + RSI ≤ 20 + 상승 다이버전스(일반/히든)
-- 하락장 숏: 가격 ≥ MA20 + RSI ≥ 62(설정) + 하락 다이버전스(일반/히든)
+- 상승장 롱: 가격 ≤ MA20 + RSI ≤ 설정값
+- 상승장 숏: 가격 ≥ MA20 + RSI ≥ 80
+- 하락장 롱: 가격 ≤ MA20 + RSI ≤ 20
+- 하락장 숏: 가격 ≥ MA20 + RSI ≥ 설정값
 익절: 5.5%, 손절: 2.5%
 """
 
@@ -50,8 +49,6 @@ MarketRegime = Literal["trend", "sideways", "neutral"]
 
 REGIME_KR = {"sideways": "횡보장", "trend": "추세장", "neutral": "중립"}
 BOX_TOUCH_THRESHOLD = 0.012
-PIVOT_LEFT_RIGHT = 2  # 피벗 판별 좌우 봉 개수
-PIVOT_LOOKBACK_TREND = 36  # 추세장 다이버전스용 최근 5분봉 개수
 
 
 def _recent_hlc(recent: list) -> Tuple[List[float], List[float], List[float]]:
@@ -134,88 +131,6 @@ def _box_touch_gap_ok(
     top_ok = len(top_indices) >= 2 and (max(top_indices) - min(top_indices)) >= min_gap_candles
     bottom_ok = len(bottom_indices) >= 2 and (max(bottom_indices) - min(bottom_indices)) >= min_gap_candles
     return (top_ok, bottom_ok)
-
-
-def _extract_closes_from_history(ph: PriceHistory) -> List[float]:
-    """PriceHistory에서 종가 리스트만 추출."""
-    if not ph:
-        return []
-    if isinstance(ph[0], (list, tuple)) and len(ph[0]) >= 3:
-        return [float(x[2]) for x in ph]
-    return [float(x) for x in ph]
-
-
-def _find_recent_pivots(
-    values: List[float],
-    *,
-    is_high: bool,
-    left_right: int = PIVOT_LEFT_RIGHT,
-    max_pivots: int = 2,
-    lookback: int = PIVOT_LOOKBACK_TREND,
-) -> List[int]:
-    """최근 구간에서 스윙 고점/저점 피벗 인덱스를 뒤에서부터 찾음 (최대 max_pivots개)."""
-    n = len(values)
-    if n < left_right * 2 + 1:
-        return []
-    start = max(0, n - lookback)
-    pivots: List[int] = []
-    for i in range(n - 1 - left_right, start + left_right - 1, -1):
-        window = values[i - left_right : i + left_right + 1]
-        center = values[i]
-        if is_high:
-            if center == max(window):
-                pivots.append(i)
-        else:
-            if center == min(window):
-                pivots.append(i)
-        if len(pivots) >= max_pivots:
-            break
-    pivots.reverse()
-    return pivots
-
-
-def _compute_pivot_divergences(
-    price_history: Optional[PriceHistory],
-    rsi_history: Optional[List[float]],
-    lookback: int = PIVOT_LOOKBACK_TREND,
-) -> Tuple[bool, bool, bool, bool]:
-    """스윙 하이/로우 기반 일반/히든 다이버전스 계산.
-
-    반환: (regular_bull, hidden_bull, regular_bear, hidden_bear)
-    """
-    if not price_history or not rsi_history:
-        return (False, False, False, False)
-    closes_all = _extract_closes_from_history(price_history)
-    n = min(len(closes_all), len(rsi_history))
-    if n < PIVOT_LEFT_RIGHT * 2 + 3:
-        return (False, False, False, False)
-    closes = closes_all[-min(n, lookback) :]
-    rsis = [float(x) for x in rsi_history[-len(closes) :]]
-
-    highs_idx = _find_recent_pivots(
-        closes, is_high=True, left_right=PIVOT_LEFT_RIGHT, max_pivots=2, lookback=len(closes)
-    )
-    lows_idx = _find_recent_pivots(
-        closes, is_high=False, left_right=PIVOT_LEFT_RIGHT, max_pivots=2, lookback=len(closes)
-    )
-
-    regular_bull = hidden_bull = regular_bear = hidden_bear = False
-
-    if len(lows_idx) >= 2:
-        i1, i2 = lows_idx[-2], lows_idx[-1]
-        p1, p2 = closes[i1], closes[i2]
-        r1, r2 = rsis[i1], rsis[i2]
-        regular_bull = p2 < p1 and r2 > r1
-        hidden_bull = p2 > p1 and r2 < r1
-
-    if len(highs_idx) >= 2:
-        i1, i2 = highs_idx[-2], highs_idx[-1]
-        p1, p2 = closes[i1], closes[i2]
-        r1, r2 = rsis[i1], rsis[i2]
-        regular_bear = p2 > p1 and r2 < r1
-        hidden_bear = p2 < p1 and r2 > r1
-
-    return (regular_bull, hidden_bull, regular_bear, hidden_bear)
 
 
 def detect_market_regime(
@@ -379,48 +294,38 @@ def swing_strategy_signal(
                 slope_pct = (ma20_end - ma20_start) / ma20_start * 100.0
                 uptrend = slope_pct > TREND_SLOPE_MIN_PCT
                 downtrend = slope_pct < -TREND_SLOPE_MIN_PCT
-        
-        # 가격·RSI 기반 피벗(스윙 하이/로우) 다이버전스
-        regular_bull_div = False
-        hidden_bull_div = False
-        regular_bear_div = False
-        hidden_bear_div = False
-        if price_history is not None and rsi_history is not None:
-            regular_bull_div, hidden_bull_div, regular_bear_div, hidden_bear_div = _compute_pivot_divergences(
-                price_history, rsi_history
-            )
 
         if not has_position:
             if uptrend:
-                # 상승장 롱: 가격 ≤ MA20 + RSI ≤ 설정값 + RSI 일반/히든 상승 다이버전스
+                # 상승장 롱: 가격 ≤ MA20 + RSI ≤ 설정값 (+ 옵션: RSI 턴업 시에만)
+                rsi_turnup_ok = not TREND_UPTREND_LONG_REQUIRE_RSI_TURNUP or rsi_prev is None or rsi_value > rsi_prev
                 if (
                     TREND_UPTREND_LONG_ENABLED
                     and price <= ma_long
                     and rsi_value <= TREND_UPTREND_LONG_RSI_MAX
-                    and (regular_bull_div or hidden_bull_div)
+                    and rsi_turnup_ok
                 ):
                     return "long"
-                # 상승장 숏: 가격 ≥ MA20 + RSI ≥ 설정값 + RSI 일반/히든 하락 다이버전스
+                # 상승장 숏: 가격 ≥ MA20 + RSI ≥ 설정값
                 if (
                     price >= ma_long
                     and rsi_value >= TREND_UPTREND_SHORT_RSI_MIN
-                    and (regular_bear_div or hidden_bear_div)
                 ):
                     return "short"
             elif downtrend:
-                # 하락장 롱: 가격 ≤ MA20 + RSI ≤ 설정값 + RSI 일반/히든 상승 다이버전스
+                # 하락장 롱: 가격 ≤ MA20 + RSI ≤ 설정값
                 if (
                     price <= ma_long
                     and rsi_value <= TREND_DOWNTREND_LONG_RSI_MAX
-                    and (regular_bull_div or hidden_bull_div)
                 ):
                     return "long"
-                # 하락장 숏: 가격 ≥ MA20 + RSI ≥ 설정값 + RSI 일반/히든 하락 다이버전스
+                # 하락장 숏: 가격 ≥ MA20 + RSI ≥ 설정값 (+ 옵션: RSI 턴다운 시에만)
+                rsi_turndown_ok = not TREND_DOWNTREND_SHORT_REQUIRE_RSI_TURNDOWN or rsi_prev is None or rsi_value < rsi_prev
                 if (
                     TREND_DOWNTREND_SHORT_ENABLED
                     and price >= ma_long
                     and rsi_value >= TREND_DOWNTREND_SHORT_RSI_MIN
-                    and (regular_bear_div or hidden_bear_div)
+                    and rsi_turndown_ok
                 ):
                     return "short"
         return "hold"

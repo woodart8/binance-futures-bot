@@ -460,6 +460,7 @@ def check_tp_sl_and_close(exchange, state: Dict[str, Any], current_price: float,
     entry_price = state["entry_price"]
     entry_balance = state["entry_balance"]
     entry_regime = state["entry_regime"]
+    entry_trend_direction = state.get("entry_trend_direction", "")
     box_high_entry = state["box_high_entry"] or 0.0
     box_low_entry = state["box_low_entry"] or 0.0
     highest_price = state["highest_price"]
@@ -494,6 +495,7 @@ def check_tp_sl_and_close(exchange, state: Dict[str, Any], current_price: float,
             regime=reg, pnl_pct=pnl_pct, price=current_price,
             entry_price=entry_price, best_pnl_pct=best_pnl_pct,
             box_high=box_high_entry, box_low=box_low_entry,
+            trend_direction=entry_trend_direction,
         )
         if reason:
             signal = "flat"
@@ -505,6 +507,7 @@ def check_tp_sl_and_close(exchange, state: Dict[str, Any], current_price: float,
             regime=reg, pnl_pct=pnl_pct, price=current_price,
             entry_price=entry_price, best_pnl_pct=best_pnl_pct,
             box_high=box_high_entry, box_low=box_low_entry,
+            trend_direction=entry_trend_direction,
         )
         if reason:
             signal = "flat"
@@ -679,6 +682,19 @@ def try_live_entry(
     if signal not in ("long", "short"):
         return (state, False)
 
+    # 추세 방향(상승/하락) 계산: 추세장일 때만 사용
+    entry_trend_direction = ""
+    if regime == "trend" and ma_long_history and len(ma_long_history) >= TREND_SLOPE_BARS:
+        recent_ma20 = ma_long_history[-TREND_SLOPE_BARS:]
+        ma20_start = recent_ma20[0]
+        ma20_end = recent_ma20[-1]
+        if ma20_start and ma20_start > 0:
+            slope_pct = (ma20_end - ma20_start) / ma20_start * 100.0
+            if slope_pct > TREND_SLOPE_MIN_PCT:
+                entry_trend_direction = "up"
+            elif slope_pct < -TREND_SLOPE_MIN_PCT:
+                entry_trend_direction = "down"
+
     try:
         balance = get_balance_usdt(exchange)
     except Exception as e:
@@ -719,8 +735,17 @@ def try_live_entry(
             entry_price_actual = _get_entry_price_after_order(exchange, SYMBOL, True, order, current_price)
             regime_kr = REGIME_KR.get(regime, regime)
             is_trend = regime == "trend"
-            tp_pct = TREND_PROFIT_TARGET if is_trend else SIDEWAYS_PROFIT_TARGET
-            sl_pct = TREND_STOP_LOSS_PRICE if is_trend else SIDEWAYS_STOP_LOSS_PRICE
+            if is_trend and entry_trend_direction in ("up", "down"):
+                is_counter_trend = entry_trend_direction == "down"  # 하락장 롱 = 역추세
+                if is_counter_trend:
+                    tp_pct = COUNTER_TREND_PROFIT_TARGET
+                    sl_pct = COUNTER_TREND_STOP_LOSS_PRICE
+                else:
+                    tp_pct = TREND_PROFIT_TARGET
+                    sl_pct = TREND_STOP_LOSS_PRICE
+            else:
+                tp_pct = TREND_PROFIT_TARGET if is_trend else SIDEWAYS_PROFIT_TARGET
+                sl_pct = TREND_STOP_LOSS_PRICE if is_trend else SIDEWAYS_STOP_LOSS_PRICE
             pct_per_leverage = 1.0 / LEVERAGE
             tg = entry_price_actual * (1 + tp_pct / 100 * pct_per_leverage)
             st = entry_price_actual * (1 - sl_pct / 100 * pct_per_leverage)
@@ -746,6 +771,7 @@ def try_live_entry(
                 "entry_price": entry_price_actual,
                 "highest_price": entry_price_actual,
                 "entry_regime": regime,
+                "entry_trend_direction": entry_trend_direction,
                 "entry_balance": balance,
                 "best_pnl_pct": 0.0,
                 "box_high_entry": box_high_entry,
@@ -762,8 +788,17 @@ def try_live_entry(
             entry_price_actual = _get_entry_price_after_order(exchange, SYMBOL, False, order, current_price)
             regime_kr = REGIME_KR.get(regime, regime)
             is_trend = regime == "trend"
-            tp_pct = TREND_PROFIT_TARGET if is_trend else SIDEWAYS_PROFIT_TARGET
-            sl_pct = TREND_STOP_LOSS_PRICE if is_trend else SIDEWAYS_STOP_LOSS_PRICE
+            if is_trend and entry_trend_direction in ("up", "down"):
+                is_counter_trend = entry_trend_direction == "up"  # 상승장 숏 = 역추세
+                if is_counter_trend:
+                    tp_pct = COUNTER_TREND_PROFIT_TARGET
+                    sl_pct = COUNTER_TREND_STOP_LOSS_PRICE
+                else:
+                    tp_pct = TREND_PROFIT_TARGET
+                    sl_pct = TREND_STOP_LOSS_PRICE
+            else:
+                tp_pct = TREND_PROFIT_TARGET if is_trend else SIDEWAYS_PROFIT_TARGET
+                sl_pct = TREND_STOP_LOSS_PRICE if is_trend else SIDEWAYS_STOP_LOSS_PRICE
             pct_per_leverage = 1.0 / LEVERAGE
             tg = entry_price_actual * (1 - tp_pct / 100 * pct_per_leverage)
             st = entry_price_actual * (1 + sl_pct / 100 * pct_per_leverage)
@@ -789,6 +824,7 @@ def try_live_entry(
                 "entry_price": entry_price_actual,
                 "lowest_price": entry_price_actual,
                 "entry_regime": regime,
+                "entry_trend_direction": entry_trend_direction,
                 "entry_balance": balance,
                 "best_pnl_pct": 0.0,
                 "box_high_entry": box_high_entry,

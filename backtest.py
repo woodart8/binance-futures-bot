@@ -311,10 +311,12 @@ def run_backtest(df: pd.DataFrame, exchange=None, candle_tf: str = "5m") -> Back
                 regime = regime_at_entry or ""
                 box_high = entry_info.get("box_high", 0.0) or 0
                 box_low = entry_info.get("box_low", 0.0) or 0
+                trend_dir = entry_info.get("trend_direction", "")
                 reason = check_long_exit(
                     regime=regime, pnl_pct=pnl_pct, price=price,
                     entry_price=entry_price, best_pnl_pct=best_pnl_pct,
                     box_high=box_high, box_low=box_low,
+                    trend_direction=trend_dir,
                 )
                 if reason:
                     msg = reason_to_display_message(reason, is_long=True)
@@ -338,10 +340,12 @@ def run_backtest(df: pd.DataFrame, exchange=None, candle_tf: str = "5m") -> Back
                 regime = regime_at_entry or ""
                 box_high = entry_info.get("box_high", 0.0) or 0
                 box_low = entry_info.get("box_low", 0.0) or 0
+                trend_dir = entry_info.get("trend_direction", "")
                 reason = check_short_exit(
                     regime=regime, pnl_pct=pnl_pct, price=price,
                     entry_price=entry_price, best_pnl_pct=best_pnl_pct,
                     box_high=box_high, box_low=box_low,
+                    trend_direction=trend_dir,
                 )
                 if reason:
                     msg = reason_to_display_message(reason, is_long=False)
@@ -773,10 +777,12 @@ def _run_backtest_1m(df_1m: pd.DataFrame, exchange=None) -> BacktestResult:
                 regime = regime_at_entry or ""
                 box_high = entry_info.get("box_high", 0.0) or 0
                 box_low = entry_info.get("box_low", 0.0) or 0
+                trend_dir = entry_info.get("trend_direction", "")
                 reason = check_long_exit(
                     regime=regime, pnl_pct=pnl_pct, price=price,
                     entry_price=entry_price, best_pnl_pct=best_pnl_pct,
                     box_high=box_high, box_low=box_low,
+                    trend_direction=trend_dir,
                 )
                 if reason:
                     msg = reason_to_display_message(reason, is_long=True)
@@ -800,10 +806,12 @@ def _run_backtest_1m(df_1m: pd.DataFrame, exchange=None) -> BacktestResult:
                 regime = regime_at_entry or ""
                 box_high = entry_info.get("box_high", 0.0) or 0
                 box_low = entry_info.get("box_low", 0.0) or 0
+                trend_dir = entry_info.get("trend_direction", "")
                 reason = check_short_exit(
                     regime=regime, pnl_pct=pnl_pct, price=price,
                     entry_price=entry_price, best_pnl_pct=best_pnl_pct,
                     box_high=box_high, box_low=box_low,
+                    trend_direction=trend_dir,
                 )
                 if reason:
                     msg = reason_to_display_message(reason, is_long=False)

@@ -75,31 +75,44 @@
 - **상승장**: 기울기 > +2.5%
 - **하락장**: 기울기 < -2.5%
 
-### 4.2 진입 조건 (가격/RSI + 스윙 피벗 다이버전스)
+### 4.2 진입 조건 (가격/RSI)
 
 **공통 (15분봉 RSI(12) 기준):**
-- 모든 추세장 진입은 **가격/RSI 조건**에 더해, **스윙 고점/저점(pivot) 기반 다이버전스**가 필요합니다.  
-  - 5분봉 최근 구간에서 스윙 고점 2개·스윙 저점 2개를 찾고, 두 피벗 간 가격과 RSI를 비교.  
-  - 일반 상승: 저점2 가격 < 저점1, 저점2 RSI > 저점1  
-  - 히든 상승: 저점2 가격 > 저점1, 저점2 RSI < 저점1  
-  - 일반 하락: 고점2 가격 > 고점1, 고점2 RSI < 고점1  
-  - 히든 하락: 고점2 가격 < 고점1, 고점2 RSI > 고점1  
+- 추세장 진입은 **장세 방향(상승/하락)** + **가격 vs MA20** + **RSI 구간**으로 결정합니다.
+- 필요 시, 옵션으로 **RSI 턴업/턴다운**(전 봉 대비 RSI가 올라갈 때만 롱, 내려갈 때만 숏)을 사용할 수 있습니다.  
+  (`config_common`: `TREND_UPTREND_LONG_REQUIRE_RSI_TURNUP`, `TREND_DOWNTREND_SHORT_REQUIRE_RSI_TURNDOWN`)
 
-**상승장:**
-- **롱**: `가격 ≤ MA20` + `RSI ≤ 42` (설정값) + **상승 다이버전스(일반/히든)**.  
-  (`config_common`: `TREND_UPTREND_LONG_RSI_MAX`, `TREND_UPTREND_LONG_ENABLED`)
-- **숏**: `가격 ≥ MA20` + `RSI ≥ 80` + **하락 다이버전스(일반/히든)**.
+**상승장(uptrend):**
+- **롱 (추세매매)**: `가격 ≤ MA20` + `RSI ≤ 42`  
+  (`TREND_UPTREND_LONG_RSI_MAX`, `TREND_UPTREND_LONG_ENABLED`)
+- **숏 (역추세매매)**: `가격 ≥ MA20` + `RSI ≥ 80`  
+  (`TREND_UPTREND_SHORT_RSI_MIN`)
 
-**하락장:**
-- **롱**: `가격 ≤ MA20` + `RSI ≤ 20` + **상승 다이버전스(일반/히든)**.
-- **숏**: `가격 ≥ MA20` + `RSI ≥ 58` (설정값) + **하락 다이버전스(일반/히든)**.  
-  (`config_common`: `TREND_DOWNTREND_SHORT_RSI_MIN`, `TREND_DOWNTREND_SHORT_ENABLED`)
+**하락장(downtrend):**
+- **롱 (역추세매매)**: `가격 ≤ MA20` + `RSI ≤ 20`  
+  (`TREND_DOWNTREND_LONG_RSI_MAX`)
+- **숏 (추세매매)**: `가격 ≥ MA20` + `RSI ≥ 58` (설정값)  
+  (`TREND_DOWNTREND_SHORT_RSI_MIN`, `TREND_DOWNTREND_SHORT_ENABLED`)
 
-### 4.3 청산 조건
+### 4.3 청산 조건 (TP/SL)
 
-- **익절**: ROE(수익률) ≥ 5.5% (추세장), 3.5% (횡보장)
-- **손절**: ROE ≤ -2.5% (추세장), -2% (횡보장)
-- **스탑로스**: 가격 기준 손실률 2.5%(추세)/2%(횡보) 도달 시
+- **추세장 내 추세매매**
+  - 상승장 롱, 하락장 숏
+  - **익절**: ROE ≥ **5.5%** (`TREND_PROFIT_TARGET`)
+  - **손절**: ROE ≤ **-2.5%** (`TREND_STOP_LOSS`)
+  - **스탑로스 가격 기준**: 약 2.5% (`TREND_STOP_LOSS_PRICE`)
+
+- **추세장 내 역추세매매**
+  - 상승장 숏, 하락장 롱
+  - **익절**: ROE ≥ **3.5%** (`COUNTER_TREND_PROFIT_TARGET`)
+  - **손절**: ROE ≤ **-2%** (`COUNTER_TREND_STOP_LOSS`)
+  - **스탑로스 가격 기준**: 약 2% (`COUNTER_TREND_STOP_LOSS_PRICE`)
+
+- **횡보장(박스 매매)**
+  - **익절**: ROE ≥ **3.5%** (`SIDEWAYS_PROFIT_TARGET`)
+  - **손절**: ROE ≤ **-2%** (`SIDEWAYS_STOP_LOSS`)
+  - **스탑로스 가격 기준**: 약 2% (`SIDEWAYS_STOP_LOSS_PRICE`)
+
 - **판단 시점**: 1분봉이 닫힌 뒤, **방금 종료된 1분봉 종가**로 체크. 실시간 ROE와 다를 수 있음.
 
 ### 4.4 실거래: 거래소 익절/손절 미리 등록 (선택)

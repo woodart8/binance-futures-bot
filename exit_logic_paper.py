@@ -14,6 +14,9 @@ from config_paper import (
     TREND_STOP_LOSS,
     TREND_PROFIT_TARGET,
     TREND_STOP_LOSS_PRICE,
+    COUNTER_TREND_PROFIT_TARGET,
+    COUNTER_TREND_STOP_LOSS,
+    COUNTER_TREND_STOP_LOSS_PRICE,
     LEVERAGE,
 )
 
@@ -37,11 +40,20 @@ def _check_exit(
     box_high: float,
     box_low: float,
     regime: str,
+    trend_direction: str = "",
 ) -> Optional[str]:
     is_trend = regime == "trend"
+    # 기본 TP/SL: 추세/횡보 공통
     sl = TREND_STOP_LOSS if is_trend else SIDEWAYS_STOP_LOSS
     tp = TREND_PROFIT_TARGET if is_trend else SIDEWAYS_PROFIT_TARGET
     sl_price = TREND_STOP_LOSS_PRICE if is_trend else SIDEWAYS_STOP_LOSS_PRICE
+    # 추세장 내부에서 역추세(상승장 숏, 하락장 롱)인 경우 별도 TP/SL 적용
+    if is_trend and trend_direction in ("up", "down"):
+        is_counter_trend = (trend_direction == "up" and not is_long) or (trend_direction == "down" and is_long)
+        if is_counter_trend:
+            sl = COUNTER_TREND_STOP_LOSS
+            tp = COUNTER_TREND_PROFIT_TARGET
+            sl_price = COUNTER_TREND_STOP_LOSS_PRICE
     reason_suffix = "_추세" if is_trend else "_횡보"
 
     if pnl_pct <= -sl:
@@ -76,8 +88,9 @@ def check_long_exit(
     best_pnl_pct: float,
     box_high: float = 0.0,
     box_low: float = 0.0,
+    trend_direction: str = "",
 ) -> Optional[str]:
-    return _check_exit(True, pnl_pct, price, entry_price, box_high, box_low, regime)
+    return _check_exit(True, pnl_pct, price, entry_price, box_high, box_low, regime, trend_direction)
 
 
 def check_short_exit(
@@ -88,8 +101,9 @@ def check_short_exit(
     best_pnl_pct: float,
     box_high: float = 0.0,
     box_low: float = 0.0,
+    trend_direction: str = "",
 ) -> Optional[str]:
-    return _check_exit(False, pnl_pct, price, entry_price, box_high, box_low, regime)
+    return _check_exit(False, pnl_pct, price, entry_price, box_high, box_low, regime, trend_direction)
 
 
 def reason_to_display_message(reason: str, is_long: bool) -> str:

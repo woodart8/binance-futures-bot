@@ -346,6 +346,7 @@ def check_scalp_stop_loss_and_profit(state: PaperState, current_price: float, ca
             best_pnl_pct=state.best_pnl_pct,
             box_high=state.box_high or 0,
             box_low=state.box_low or 0,
+            trend_direction=state.entry_trend_direction if hasattr(state, "entry_trend_direction") else "",
         )
         if reason:
             msg = reason_to_display_message(reason, is_long=True)
@@ -369,6 +370,7 @@ def check_scalp_stop_loss_and_profit(state: PaperState, current_price: float, ca
             best_pnl_pct=state.best_pnl_pct,
             box_high=state.box_high or 0,
             box_low=state.box_low or 0,
+            trend_direction=state.entry_trend_direction if hasattr(state, "entry_trend_direction") else "",
         )
         if reason:
             msg = reason_to_display_message(reason, is_long=False)
