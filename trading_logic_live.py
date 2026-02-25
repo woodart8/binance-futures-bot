@@ -40,19 +40,36 @@ from exit_logic import check_long_exit, check_short_exit, reason_to_display_mess
 from trade_logger import log_trade
 from logger import log
 
+def _symbol_matches_order(symbol: str, order_symbol: str) -> bool:
+    """주문의 symbol이 우리 심볼과 같은지 (BTC/USDT vs BTCUSDT vs BTC/USDT:USDT)."""
+    if not order_symbol:
+        return False
+    a = symbol.replace("/", "").replace(":USDT", "").upper()
+    b = (order_symbol or "").replace("/", "").replace(":USDT", "").upper()
+    return a == b
+
+
 def _get_existing_tp_sl_order_ids(exchange, symbol: str) -> Tuple[str, str]:
     """거래소 미체결 주문에서 익절(TAKE_PROFIT_MARKET)·손절(STOP_MARKET) 주문 ID 반환. (tp_id, sl_id), 없으면 ""."""
     tp_id, sl_id = "", ""
     try:
-        orders = exchange.fetch_open_orders(symbol)
+        # 심볼 형식 차이(BTC/USDT vs BTC/USDT:USDT)로 빈 결과 방지: 전부 조회 후 심볼 필터. 실패 시 symbol로 재시도.
+        try:
+            orders = exchange.fetch_open_orders()
+        except Exception:
+            orders = exchange.fetch_open_orders(symbol)
         for o in orders:
-            t = (o.get("type") or o.get("info", {}).get("type") or "").upper()
+            osym = o.get("symbol") or o.get("info", {}).get("symbol") or ""
+            if not _symbol_matches_order(symbol, osym):
+                continue
+            info_type = (o.get("info", {}).get("type") or "").upper()
+            t = (o.get("type") or info_type or "").upper()
             oid = o.get("id") or o.get("info", {}).get("orderId")
             if not oid:
                 continue
-            if "TAKE_PROFIT" in t:
+            if "TAKE_PROFIT" in t or "TAKE_PROFIT" in info_type:
                 tp_id = str(oid)
-            elif t == "STOP_MARKET" or (t == "STOP" and (o.get("info", {}).get("type") or "").upper() == "STOP_MARKET"):
+            elif "STOP_MARKET" in t or info_type == "STOP_MARKET":
                 sl_id = str(oid)
     except Exception as e:
         log(f"미체결 주문 조회 실패: {e}", "WARNING")
