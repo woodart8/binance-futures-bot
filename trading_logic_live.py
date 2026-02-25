@@ -2,7 +2,7 @@
 
 - 잔고: get_balance_usdt는 total 기준. 청산은 포지션 매칭 후 contracts>0일 때만 API 호출.
 - 포지션 동기화: sync_state_from_exchange로 시작 시·매 루프 거래소 실제 포지션과 state 일치(로그와 실제 포지션 불일치 방지).
-- 거래소 TP/SL: USE_EXCHANGE_TP_SL=True면 진입 직후 TAKE_PROFIT_MARKET(익절), STOP_MARKET(손절) 등록(바이낸스 USD-M). 익절/손절가는 실제 포지션 체결가 기준(주문 응답 average 또는 포지션 조회).
+- 거래소 TP/SL: USE_EXCHANGE_TP_SL=True면 진입 직후 익절=지정가(LIMIT) reduceOnly, 손절=STOP_MARKET. 익절/손절가는 실제 포지션 체결가 기준.
 - 로그 기준: 진입 로그(가격·목표가·손절가)는 체결가 기준. 청산 로그(진입가·수익률·손익)와 [1분] 상태 로그(진입가·목표가·손절가·미실현)는 청산/로그 시점에 fetch_positions로 조회한 실제 포지션 기준.
 """
 
@@ -49,11 +49,28 @@ def _symbol_matches_order(symbol: str, order_symbol: str) -> bool:
     return a == b
 
 
+def _fetch_open_algo_orders(exchange, symbol: str) -> list:
+    """바이낸스 조건부(알고) 미체결 주문 조회. GET /fapi/v1/openAlgoOrders. ccxt에 없어 request로 fapi private 호출."""
+    sym = symbol.replace("/", "").replace(":USDT", "")  # BTCUSDT
+    params = {"symbol": sym}
+    if not hasattr(exchange, "request"):
+        return []
+    for path in ("openAlgoOrders", "v1/openAlgoOrders"):
+        try:
+            data = exchange.request(path, "fapiPrivate", "GET", params)
+            return data if isinstance(data, list) else []
+        except Exception:
+            continue
+    return []
+
+
 def _get_existing_tp_sl_order_ids(exchange, symbol: str) -> Tuple[str, str]:
-    """거래소 미체결 주문에서 익절(TAKE_PROFIT_MARKET)·손절(STOP_MARKET) 주문 ID 반환. (tp_id, sl_id), 없으면 ""."""
+    """거래소 미체결 주문에서 익절·손절 주문 ID 반환. 일반 openOrders + 조건부 openAlgoOrders 모두 확인. (tp_id, sl_id)."""
     tp_id, sl_id = "", ""
+    sym_norm = symbol.replace("/", "").replace(":USDT", "").upper()
+
+    # 1) 일반 미체결 주문 (openOrders)
     try:
-        # 심볼 형식 차이(BTC/USDT vs BTC/USDT:USDT)로 빈 결과 방지: 전부 조회 후 심볼 필터. 실패 시 symbol로 재시도.
         try:
             orders = exchange.fetch_open_orders()
         except Exception:
@@ -67,17 +84,38 @@ def _get_existing_tp_sl_order_ids(exchange, symbol: str) -> Tuple[str, str]:
             oid = o.get("id") or o.get("info", {}).get("orderId")
             if not oid:
                 continue
+            reduce_only = o.get("reduceOnly") or o.get("info", {}).get("reduceOnly")
             if "TAKE_PROFIT" in t or "TAKE_PROFIT" in info_type:
                 tp_id = str(oid)
+            elif (t == "LIMIT" or info_type == "LIMIT") and reduce_only and not tp_id:
+                tp_id = str(oid)  # 익절을 지정가 reduceOnly로 걸었을 때
             elif "STOP_MARKET" in t or info_type == "STOP_MARKET":
                 sl_id = str(oid)
     except Exception as e:
         log(f"미체결 주문 조회 실패: {e}", "WARNING")
+
+    # 2) 조건부(알고) 미체결 주문 (openAlgoOrders) — TP/SL이 여기 있을 수 있음
+    if not tp_id or not sl_id:
+        algo_list = _fetch_open_algo_orders(exchange, symbol)
+        for a in algo_list:
+            if not isinstance(a, dict):
+                continue
+            asym = (a.get("symbol") or "").upper()
+            if asym != sym_norm:
+                continue
+            otype = (a.get("orderType") or a.get("type") or "").upper()
+            oid = a.get("algoId") or a.get("orderId") or a.get("id")
+            if not oid:
+                continue
+            if "TAKE_PROFIT" in otype and not tp_id:
+                tp_id = str(oid)
+            elif otype == "STOP_MARKET" and not sl_id:
+                sl_id = str(oid)
     return (tp_id, sl_id)
 
 
 def _place_tp_order(exchange, symbol: str, is_long: bool, amount: float, entry_price: float, tp_pct: float) -> str:
-    """익절 주문 1개만 등록. 반환: order_id 또는 ""."""
+    """익절: 지정가(LIMIT) + reduceOnly. 목표가에 지정가 주문으로 체결."""
     pct_per_leverage = 1.0 / LEVERAGE
     if is_long:
         tp_price = entry_price * (1 + tp_pct / 100 * pct_per_leverage)
@@ -87,7 +125,7 @@ def _place_tp_order(exchange, symbol: str, is_long: bool, amount: float, entry_p
         close_side = "buy"
     try:
         tp_order = exchange.create_order(
-            symbol, "TAKE_PROFIT_MARKET", close_side, amount, None, {"stopPrice": tp_price, "reduceOnly": True}
+            symbol, "limit", close_side, amount, tp_price, {"reduceOnly": True}
         )
         return (tp_order.get("id") or "") if isinstance(tp_order, dict) else ""
     except Exception as e:

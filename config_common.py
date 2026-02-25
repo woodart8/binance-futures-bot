@@ -57,7 +57,7 @@ SIDEWAYS_STOP_LOSS = 2.0
 SIDEWAYS_STOP_LOSS_PRICE = 2.0
 SIDEWAYS_BOX_EXIT_MARGIN_PCT = 0.5  # 박스 상·하단 돌파(이탈) 기준: 가격이 상단/하단에서 0.5% 벗어나면 이탈
 
-# 실거래: 진입 시 거래소에 익절(TAKE_PROFIT_MARKET)·손절(STOP_MARKET) 미리 등록. True=거래소가 익절/손절 처리, 봇은 박스 이탈만 시장가 청산. False=봇이 1분봉마다 체크 후 시장가 청산.
+# 실거래: 진입 시 거래소에 익절(지정가 LIMIT reduceOnly)·손절(STOP_MARKET) 미리 등록. True=거래소가 익절/손절 처리, 봇은 박스 이탈만 시장가 청산. False=봇이 1분봉마다 체크 후 시장가 청산.
 USE_EXCHANGE_TP_SL = True
 
 # 손실 한도 (paper/live에서 override 가능)
