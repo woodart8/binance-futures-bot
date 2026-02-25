@@ -79,20 +79,22 @@
 
 **공통 (15분봉 RSI(12) 기준):**
 - 추세장 진입은 **장세 방향(상승/하락)** + **가격 vs MA20** + **RSI 구간**으로 결정합니다.
-- 필요 시, 옵션으로 **RSI 턴업/턴다운**(전 봉 대비 RSI가 올라갈 때만 롱, 내려갈 때만 숏)을 사용할 수 있습니다.  
-  (`config_common`: `TREND_UPTREND_LONG_REQUIRE_RSI_TURNUP`, `TREND_DOWNTREND_SHORT_REQUIRE_RSI_TURNDOWN`)
+- **RSI 꺾임 옵션**: 전 봉 대비 RSI가 올라갈 때만 롱(턴업), 내려갈 때만 숏(턴다운) 진입하도록 설정 가능.  
+  - 추세매매: `TREND_UPTREND_LONG_REQUIRE_RSI_TURNUP`(상승장 롱), `TREND_DOWNTREND_SHORT_REQUIRE_RSI_TURNDOWN`(하락장 숏)  
+  - 역추세매매: `TREND_UPTREND_SHORT_REQUIRE_RSI_TURNDOWN`(상승장 숏), `TREND_DOWNTREND_LONG_REQUIRE_RSI_TURNUP`(하락장 롱)  
+  기본값은 모두 True(꺾임 있을 때만 진입).
 
 **상승장(uptrend):**
-- **롱 (추세매매)**: `가격 ≤ MA20` + `RSI ≤ 42`  
-  (`TREND_UPTREND_LONG_RSI_MAX`, `TREND_UPTREND_LONG_ENABLED`)
-- **숏 (역추세매매)**: `가격 ≥ MA20` + `RSI ≥ 80`  
-  (`TREND_UPTREND_SHORT_RSI_MIN`)
+- **롱 (추세매매)**: `가격 ≤ MA20` + `RSI ≤ 42` (+ 옵션: RSI 턴업 시에만)  
+  (`TREND_UPTREND_LONG_RSI_MAX`, `TREND_UPTREND_LONG_ENABLED`, `TREND_UPTREND_LONG_REQUIRE_RSI_TURNUP`)
+- **숏 (역추세매매)**: `가격 ≥ MA20` + `RSI ≥ 80` (+ 옵션: RSI 턴다운 시에만)  
+  (`TREND_UPTREND_SHORT_RSI_MIN`, `TREND_UPTREND_SHORT_REQUIRE_RSI_TURNDOWN`)
 
 **하락장(downtrend):**
-- **롱 (역추세매매)**: `가격 ≤ MA20` + `RSI ≤ 20`  
-  (`TREND_DOWNTREND_LONG_RSI_MAX`)
-- **숏 (추세매매)**: `가격 ≥ MA20` + `RSI ≥ 58` (설정값)  
-  (`TREND_DOWNTREND_SHORT_RSI_MIN`, `TREND_DOWNTREND_SHORT_ENABLED`)
+- **롱 (역추세매매)**: `가격 ≤ MA20` + `RSI ≤ 20` (+ 옵션: RSI 턴업 시에만)  
+  (`TREND_DOWNTREND_LONG_RSI_MAX`, `TREND_DOWNTREND_LONG_REQUIRE_RSI_TURNUP`)
+- **숏 (추세매매)**: `가격 ≥ MA20` + `RSI ≥ 58` (설정값) (+ 옵션: RSI 턴다운 시에만)  
+  (`TREND_DOWNTREND_SHORT_RSI_MIN`, `TREND_DOWNTREND_SHORT_ENABLED`, `TREND_DOWNTREND_SHORT_REQUIRE_RSI_TURNDOWN`)
 
 ### 4.3 청산 조건 (TP/SL)
 

@@ -5,11 +5,11 @@
 장세 이탈: 박스는 직전 봉까지로 계산해, 가격이 상·하단 0.5% 돌파 시 neutral(중립) 전환.
 
 추세장: MA20 기울기 ±2.5% 초과 시 상승/하락 판단.
-- 상승장 롱: 가격 ≤ MA20 + RSI ≤ 설정값
-- 상승장 숏: 가격 ≥ MA20 + RSI ≥ 80
-- 하락장 롱: 가격 ≤ MA20 + RSI ≤ 20
-- 하락장 숏: 가격 ≥ MA20 + RSI ≥ 설정값
-익절: 5.5%, 손절: 2.5%
+- 상승장 롱(추세): 가격 ≤ MA20 + RSI ≤ 설정값 (+ 옵션: RSI 턴업 시에만)
+- 상승장 숏(역추세): 가격 ≥ MA20 + RSI ≥ 80 (+ 옵션: RSI 턴다운 시에만)
+- 하락장 롱(역추세): 가격 ≤ MA20 + RSI ≤ 20 (+ 옵션: RSI 턴업 시에만)
+- 하락장 숏(추세): 가격 ≥ MA20 + RSI ≥ 설정값 (+ 옵션: RSI 턴다운 시에만)
+익절/손절: 추세매매 5.5%/2.5%, 역추세매매 3.5%/2% (exit_logic에서 trend_direction 분기).
 """
 
 from typing import Literal, Optional, List, Union, Tuple
@@ -38,7 +38,9 @@ from config_paper import (
     TREND_UPTREND_LONG_ENABLED,
     TREND_UPTREND_LONG_REQUIRE_RSI_TURNUP,
     TREND_UPTREND_SHORT_RSI_MIN,
+    TREND_UPTREND_SHORT_REQUIRE_RSI_TURNDOWN,
     TREND_DOWNTREND_LONG_RSI_MAX,
+    TREND_DOWNTREND_LONG_REQUIRE_RSI_TURNUP,
     TREND_DOWNTREND_SHORT_RSI_MIN,
     TREND_DOWNTREND_SHORT_ENABLED,
     TREND_DOWNTREND_SHORT_REQUIRE_RSI_TURNDOWN,
@@ -306,17 +308,21 @@ def swing_strategy_signal(
                     and rsi_turnup_ok
                 ):
                     return "long"
-                # 상승장 숏: 가격 ≥ MA20 + RSI ≥ 설정값
+                # 상승장 숏(역추세): 가격 ≥ MA20 + RSI ≥ 설정값 (+ 옵션: RSI 턴다운 시에만)
+                rsi_turndown_ok_short = not TREND_UPTREND_SHORT_REQUIRE_RSI_TURNDOWN or rsi_prev is None or rsi_value < rsi_prev
                 if (
                     price >= ma_long
                     and rsi_value >= TREND_UPTREND_SHORT_RSI_MIN
+                    and rsi_turndown_ok_short
                 ):
                     return "short"
             elif downtrend:
-                # 하락장 롱: 가격 ≤ MA20 + RSI ≤ 설정값
+                # 하락장 롱(역추세): 가격 ≤ MA20 + RSI ≤ 설정값 (+ 옵션: RSI 턴업 시에만)
+                rsi_turnup_ok_long = not TREND_DOWNTREND_LONG_REQUIRE_RSI_TURNUP or rsi_prev is None or rsi_value > rsi_prev
                 if (
                     price <= ma_long
                     and rsi_value <= TREND_DOWNTREND_LONG_RSI_MAX
+                    and rsi_turnup_ok_long
                 ):
                     return "long"
                 # 하락장 숏: 가격 ≥ MA20 + RSI ≥ 설정값 (+ 옵션: RSI 턴다운 시에만)
@@ -417,7 +423,7 @@ def get_hold_reason(
                 return f"상승장 숏: 가격이 MA20 미만 (가격 {price:.2f} < MA20 {ma_long:.2f})"
             if rsi_value < TREND_UPTREND_SHORT_RSI_MIN:
                 return f"상승장 숏: RSI 과매도 (RSI {rsi_value:.0f} < {TREND_UPTREND_SHORT_RSI_MIN})"
-            return "상승장: 가격·RSI 조건 미충족"
+            return "상승장: 가격·RSI 조건 미충족(또는 RSI 꺾임 미충족)"
         elif downtrend:
             # 하락장 롱 조건 체크: 가격이 MA20 이하
             if price > ma_long:
@@ -429,7 +435,7 @@ def get_hold_reason(
                 return f"하락장 숏: 가격이 MA20 미만 (가격 {price:.2f} < MA20 {ma_long:.2f})"
             if rsi_value < TREND_DOWNTREND_SHORT_RSI_MIN:
                 return f"하락장 숏: RSI 과매도 (RSI {rsi_value:.0f} < {TREND_DOWNTREND_SHORT_RSI_MIN})"
-            return "하락장: 가격·RSI 조건 미충족"
+            return "하락장: 가격·RSI 조건 미충족(또는 RSI 꺾임 미충족)"
         return "MA20 기울기 데이터 부족 또는 추세 방향 불명확"
 
     if regime == "neutral":

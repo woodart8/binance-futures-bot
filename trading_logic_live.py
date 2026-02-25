@@ -2,7 +2,7 @@
 
 - 잔고: get_balance_usdt는 total 기준. 청산은 포지션 매칭 후 contracts>0일 때만 API 호출.
 - 포지션 동기화: sync_state_from_exchange로 시작 시·매 루프 거래소 실제 포지션과 state 일치.
-- 거래소 익절/손절: USE_EXCHANGE_TP_SL=True면 진입 직후 익절=지정가(LIMIT) reduceOnly, 손절=STOP_MARKET. 가격은 체결가 기준. 거래소에서 체결되면 동기화 시 청산 로그·CSV 기록.
+- 거래소 익절/손절: USE_EXCHANGE_TP_SL=True면 진입 직후 익절=지정가(LIMIT) reduceOnly, 손절=STOP_MARKET. 추세매매 5.5%/2.5%, 역추세 3.5%/2%(entry_trend_direction 기준). 거래소에서 체결되면 동기화 시 청산 로그·CSV 기록.
 - 잔여 SL 정리: 포지션이 전혀 없는데 SL 주문만 남은 경우 동기화 시 SL 주문을 자동 취소해 수동 청산 후 남은 주문을 정리.
 - 로그 기준: 진입·청산·[1분] 상태 로그의 진입가/목표가/손절가/PnL은 거래소 실제 포지션(또는 체결가) 기준.
 """

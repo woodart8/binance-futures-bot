@@ -1,6 +1,8 @@
 """실거래 전용 청산 로직. 수정 시 페이퍼/백테스트에 영향 없음.
 
-익절/손절: ROE(수익률 %, pnl_pct) 기준. 추세장 익절 TREND_PROFIT_TARGET(5.5%), 손절 TREND_STOP_LOSS(2.5%).
+익절/손절: ROE(수익률 %, pnl_pct) 기준. 진입 시 trend_direction으로 추세/역추세 구분.
+- 추세매매(상승장 롱·하락장 숏): 익절 TREND_PROFIT_TARGET(5.5%), 손절 TREND_STOP_LOSS(2.5%).
+- 역추세매매(상승장 숏·하락장 롱): 익절 COUNTER_TREND(3.5%), 손절 COUNTER_TREND(2%).
 판단 시점은 1분봉이 닫힐 때마다 방금 종료된 1분봉 종가. 실시간 ROE와 다를 수 있음.
 박스권 이탈: 가격이 진입 시점 box_high/box_low에서 SIDEWAYS_BOX_EXIT_MARGIN_PCT(0.5%) 벗어나면
 상단 이탈(숏 청산) 또는 하단 이탈(롱 청산). 가격 기준이며 ROE 아님.

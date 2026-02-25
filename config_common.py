@@ -39,8 +39,10 @@ TREND_UPTREND_LONG_RSI_MAX = 42  # 상승장 롱: RSI ≤ 42 (기존 40보다 �
 TREND_UPTREND_LONG_ENABLED = True  # False면 상승장에서 롱 진입 안 함
 TREND_UPTREND_LONG_REQUIRE_RSI_TURNUP = True  # True면 RSI가 전봉 대비 상승할 때만 롱 (조정 exhaustion)
 TREND_UPTREND_SHORT_RSI_MIN = 80  # 상승장 숏: RSI ≥ 80 (원래값 유지)
+TREND_UPTREND_SHORT_REQUIRE_RSI_TURNDOWN = True  # 상승장 숏(역추세): RSI 턴다운 시에만 (추세매매와 동일 꺾임 체크)
 # 하락장 진입 조건 (이상/이하 조건)
 TREND_DOWNTREND_LONG_RSI_MAX = 20  # 하락장 롱: RSI ≤ 20 (원래값 유지)
+TREND_DOWNTREND_LONG_REQUIRE_RSI_TURNUP = True  # 하락장 롱(역추세): RSI 턴업 시에만 (추세매매와 동일 꺾임 체크)
 TREND_DOWNTREND_SHORT_RSI_MIN = 58  # 하락장 숏: RSI ≥ 58 (기존 62보다 완화)
 TREND_DOWNTREND_SHORT_ENABLED = True  # False면 하락장에서 숏 진입 안 함
 TREND_DOWNTREND_SHORT_REQUIRE_RSI_TURNDOWN = True  # True면 RSI가 전봉 대비 꺾일 때만 숏 (반등 exhaustion)
