@@ -75,15 +75,24 @@
 - **상승장**: 기울기 > +2.5%
 - **하락장**: 기울기 < -2.5%
 
-### 4.2 진입 조건
+### 4.2 진입 조건 (가격/RSI + 다이버전스)
 
-**상승장 (15분봉 RSI(12) 기준):**
-- **롱**: `가격 ≤ MA20` + `RSI ≤ 42` (설정값). 옵션으로 **RSI 상승 전환**(전봉 대비 RSI 상승) 시에만 진입해 조정 초반 롱을 줄임. (`config_common`: `TREND_UPTREND_LONG_RSI_MAX`, `TREND_UPTREND_LONG_ENABLED`, `TREND_UPTREND_LONG_REQUIRE_RSI_TURNUP`)
-- **숏**: `가격 ≥ MA20` + `RSI ≥ 80`
+**공통 (15분봉 RSI(12) 기준):**
+- 모든 추세장 진입은 **가격/RSI 조건**에 더해, 직전 봉 대비 **RSI 일반·히든 다이버전스**가 함께 나와야 합니다.  
+  - 일반 상승 다이버전스: 가격은 더 낮은데 RSI는 더 높음  
+  - 히든 상승 다이버전스: 가격은 더 높은데 RSI는 더 낮음 (추세 지속)  
+  - 일반 하락 다이버전스: 가격은 더 높은데 RSI는 더 낮음  
+  - 히든 하락 다이버전스: 가격은 더 낮은데 RSI는 더 높음 (추세 지속)
 
-**하락장 (15분봉 RSI(12) 기준):**
-- **롱**: `가격 ≤ MA20` + `RSI ≤ 20`
-- **숏**: `가격 ≥ MA20` + `RSI ≥ 58` (설정값). 옵션으로 **RSI 꺾임**(전봉 대비 RSI 하락) 시에만 진입해 반등 초반 숏을 줄임. (`config_common`: `TREND_DOWNTREND_SHORT_RSI_MIN`, `TREND_DOWNTREND_SHORT_ENABLED`, `TREND_DOWNTREND_SHORT_REQUIRE_RSI_TURNDOWN`)
+**상승장:**
+- **롱**: `가격 ≤ MA20` + `RSI ≤ 42` (설정값) + (옵션) **RSI 상승 전환**(전봉 대비 RSI 상승) + **상승 다이버전스(일반/히든)**.  
+  (`config_common`: `TREND_UPTREND_LONG_RSI_MAX`, `TREND_UPTREND_LONG_ENABLED`, `TREND_UPTREND_LONG_REQUIRE_RSI_TURNUP`)
+- **숏**: `가격 ≥ MA20` + `RSI ≥ 80` + **하락 다이버전스(일반/히든)**.
+
+**하락장:**
+- **롱**: `가격 ≤ MA20` + `RSI ≤ 20` + **상승 다이버전스(일반/히든)**.
+- **숏**: `가격 ≥ MA20` + `RSI ≥ 58` (설정값) + (옵션) **RSI 꺾임**(전봉 대비 RSI 하락) + **하락 다이버전스(일반/히든)**.  
+  (`config_common`: `TREND_DOWNTREND_SHORT_RSI_MIN`, `TREND_DOWNTREND_SHORT_ENABLED`, `TREND_DOWNTREND_SHORT_REQUIRE_RSI_TURNDOWN`)
 
 ### 4.3 청산 조건
 
@@ -121,7 +130,7 @@
 
 - **paper_trading.py** — 페이퍼 트레이딩. 1분봉 수집 후 5m 리샘플, 새 1분봉 시 방금 종료된 1분봉 종가로 진입·청산.
 - **live_trader_agent.py** — 실거래. 1분봉 수집 후 5m 리샘플, 새 1분봉 시 방금 종료된 1분봉 종가로 진입·청산. 시작 시·매 루프 **거래소 포지션 동기화**(`sync_state_from_exchange`)로 로그 포지션과 실제 포지션 일치.
-- **trading_logic_live.py** — 실거래 전용: 잔고/포지션 조회, 포지션 동기화, 진입 시 거래소 익절(limit reduceOnly)·손절(STOP_MARKET) 등록, 박스 이탈 시 시장가 청산. 거래소 익절/손절 체결 시 동기화에서 청산 로그·CSV 기록.
+- **trading_logic_live.py** — 실거래 전용: 잔고/포지션 조회, 포지션 동기화, 진입 시 거래소 익절(limit reduceOnly)·손절(STOP_MARKET) 등록, 박스 이탈 시 시장가 청산. 거래소 익절/손절 체결 시 동기화에서 청산 로그·CSV 기록, **포지션이 없는데 잔여 SL 주문이 남아 있으면 자동 취소**.
 - **strategy_core_paper.py** / **strategy_core_live.py** — 장세 판별, 진입 신호, 진입/보유 사유 문자열
 - **exit_logic_paper.py** / **exit_logic_live.py** — 목표익절·손절·스탑로스·박스 이탈(상·하단 0.5% 돌파) 청산
 - **funding.py** — 펀딩 레이트 조회, 00/08/16 UTC 정산·손익 계산  

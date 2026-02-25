@@ -5,10 +5,10 @@
 장세 이탈: 박스는 직전 봉까지로 계산해, 가격이 상·하단 0.5% 돌파 시 neutral(중립) 전환.
 
 추세장: MA20 기울기 ±2.5% 초과 시 상승/하락 판단.
-- 상승장 롱: 가격 ≤ MA20 + RSI ≤ 40(설정), 옵션으로 RSI 상승 전환 시에만 진입(조정 초반 롱 방지)
-- 상승장 숏: 가격 ≥ MA20 + RSI ≥ 80
-- 하락장 롱: 가격 ≤ MA20 + RSI ≤ 20
-- 하락장 숏: 가격 ≥ MA20 + RSI ≥ 62(설정), 옵션으로 RSI 꺾임 시에만 진입(반등 초반 숏 방지)
+- 상승장 롱: 가격 ≤ MA20 + RSI ≤ 40(설정), 옵션으로 RSI 상승 전환 시에만 진입(조정 초반 롱 방지) + RSI 일반/히든 상승 다이버전스(가격 vs RSI)
+- 상승장 숏: 가격 ≥ MA20 + RSI ≥ 80 + RSI 일반/히든 하락 다이버전스
+- 하락장 롱: 가격 ≤ MA20 + RSI ≤ 20 + RSI 일반/히든 상승 다이버전스
+- 하락장 숏: 가격 ≥ MA20 + RSI ≥ 62(설정), 옵션으로 RSI 꺾임 시에만 진입(반등 초반 숏 방지) + RSI 일반/히든 하락 다이버전스
 익절: 5.5%, 손절: 2.5%
 """
 
@@ -294,29 +294,59 @@ def swing_strategy_signal(
                 uptrend = slope_pct > TREND_SLOPE_MIN_PCT
                 downtrend = slope_pct < -TREND_SLOPE_MIN_PCT
         
+        # 가격·RSI 기반 단순 다이버전스/히든 다이버전스 (직전 봉 vs 현재 봉 비교)
+        price_prev = None
+        if close_prev is not None:
+            price_prev = close_prev
+        elif open_prev is not None:
+            price_prev = open_prev
+        regular_bull_div = False
+        hidden_bull_div = False
+        regular_bear_div = False
+        hidden_bear_div = False
+        if price_prev is not None and rsi_prev is not None:
+            # 일반 상승 다이버전스: 가격은 더 낮은데 RSI는 더 높음
+            regular_bull_div = price < price_prev and rsi_value > rsi_prev
+            # 히든 상승 다이버전스: 가격은 더 높은데 RSI는 더 낮음 (추세 지속 측)
+            hidden_bull_div = price > price_prev and rsi_value < rsi_prev
+            # 일반 하락 다이버전스: 가격은 더 높은데 RSI는 더 낮음
+            regular_bear_div = price > price_prev and rsi_value < rsi_prev
+            # 히든 하락 다이버전스: 가격은 더 낮은데 RSI는 더 높음
+            hidden_bear_div = price < price_prev and rsi_value > rsi_prev
+
         if not has_position:
             if uptrend:
                 # 상승장 롱: RSI ≤ MAX + 가격이 MA20 이하 (+ 옵션: RSI 상승 전환 시에만, 조정 초반 롱 방지)
-                if TREND_UPTREND_LONG_ENABLED and price <= ma_long and rsi_value <= TREND_UPTREND_LONG_RSI_MAX:
-                    if TREND_UPTREND_LONG_REQUIRE_RSI_TURNUP:
-                        if rsi_prev is not None and rsi_value > rsi_prev:
+                if (
+                    TREND_UPTREND_LONG_ENABLED
+                    and price <= ma_long
+                    and rsi_value <= TREND_UPTREND_LONG_RSI_MAX
+                ):
+                    if price_prev is not None and rsi_prev is not None:
+                        if TREND_UPTREND_LONG_REQUIRE_RSI_TURNUP and rsi_value > rsi_prev and (regular_bull_div or hidden_bull_div):
                             return "long"
-                    else:
-                        return "long"
+                        if not TREND_UPTREND_LONG_REQUIRE_RSI_TURNUP and (regular_bull_div or hidden_bull_div):
+                            return "long"
                 # 상승장 숏: RSI ≥ 80 + 가격이 MA20 이상
                 if price >= ma_long and rsi_value >= TREND_UPTREND_SHORT_RSI_MIN:
-                    return "short"
+                    if price_prev is not None and rsi_prev is not None and (regular_bear_div or hidden_bear_div):
+                        return "short"
             elif downtrend:
                 # 하락장 롱: RSI ≤ 20 + 가격이 MA20 이하
                 if price <= ma_long and rsi_value <= TREND_DOWNTREND_LONG_RSI_MAX:
-                    return "long"
+                    if price_prev is not None and rsi_prev is not None and (regular_bull_div or hidden_bull_div):
+                        return "long"
                 # 하락장 숏: RSI ≥ MIN + 가격이 MA20 이상 (+ 옵션: RSI 꺾임 시에만, 반등 초반 숏 방지)
-                if TREND_DOWNTREND_SHORT_ENABLED and price >= ma_long and rsi_value >= TREND_DOWNTREND_SHORT_RSI_MIN:
-                    if TREND_DOWNTREND_SHORT_REQUIRE_RSI_TURNDOWN:
-                        if rsi_prev is not None and rsi_value < rsi_prev:
+                if (
+                    TREND_DOWNTREND_SHORT_ENABLED
+                    and price >= ma_long
+                    and rsi_value >= TREND_DOWNTREND_SHORT_RSI_MIN
+                ):
+                    if price_prev is not None and rsi_prev is not None:
+                        if TREND_DOWNTREND_SHORT_REQUIRE_RSI_TURNDOWN and rsi_value < rsi_prev and (regular_bear_div or hidden_bear_div):
                             return "short"
-                    else:
-                        return "short"
+                        if not TREND_DOWNTREND_SHORT_REQUIRE_RSI_TURNDOWN and (regular_bear_div or hidden_bear_div):
+                            return "short"
         return "hold"
 
     # 중립: 진입 안 함
