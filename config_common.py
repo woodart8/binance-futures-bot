@@ -27,6 +27,7 @@ REGIME_LOOKBACK_15M = 96
 # 추세장
 TREND_SLOPE_BARS = 96  # 24시간 = 96봉 (15분봉 기준)
 TREND_SLOPE_MIN_PCT = 2.5  # 24h 기울기 ±2.5% 초과 시 추세장
+TREND_COUNTER_TREND_SLOPE_MAX_PCT = 5.0  # MA20 기울기 절대값이 이 값 이상이면 역추세 진입 안 함 (상승장 숏·하락장 롱 스킵)
 TREND_PROFIT_TARGET = 5.5
 TREND_STOP_LOSS = 2.5
 TREND_STOP_LOSS_PRICE = 2.5

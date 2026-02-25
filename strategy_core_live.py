@@ -33,6 +33,7 @@ from config_live import (
     SIDEWAYS_BOX_EXIT_MARGIN_PCT,
     TREND_SLOPE_BARS,
     TREND_SLOPE_MIN_PCT,
+    TREND_COUNTER_TREND_SLOPE_MAX_PCT,
     TREND_UPTREND_LONG_RSI_MAX,
     TREND_UPTREND_LONG_ENABLED,
     TREND_UPTREND_LONG_REQUIRE_RSI_TURNUP,
@@ -292,23 +293,25 @@ def swing_strategy_signal(
                     and rsi_turnup_ok
                 ):
                     return "long"
-                # 상승장 숏(역추세): 가격 ≥ MA20 + RSI ≥ 설정값 (+ 옵션: RSI 턴다운 시에만)
-                rsi_turndown_ok_short = not TREND_UPTREND_SHORT_REQUIRE_RSI_TURNDOWN or rsi_prev is None or rsi_value < rsi_prev
-                if (
-                    price >= ma_long
-                    and rsi_value >= TREND_UPTREND_SHORT_RSI_MIN
-                    and rsi_turndown_ok_short
-                ):
-                    return "short"
+                # 상승장 숏(역추세): 가격 ≥ MA20 + RSI ≥ 설정값 (+ 옵션: RSI 턴다운 시에만). 기울기 절대값 4% 미만일 때만
+                if abs(slope_pct) < TREND_COUNTER_TREND_SLOPE_MAX_PCT:
+                    rsi_turndown_ok_short = not TREND_UPTREND_SHORT_REQUIRE_RSI_TURNDOWN or rsi_prev is None or rsi_value < rsi_prev
+                    if (
+                        price >= ma_long
+                        and rsi_value >= TREND_UPTREND_SHORT_RSI_MIN
+                        and rsi_turndown_ok_short
+                    ):
+                        return "short"
             elif downtrend:
-                # 하락장 롱(역추세): 가격 ≤ MA20 + RSI ≤ 설정값 (+ 옵션: RSI 턴업 시에만)
-                rsi_turnup_ok_long = not TREND_DOWNTREND_LONG_REQUIRE_RSI_TURNUP or rsi_prev is None or rsi_value > rsi_prev
-                if (
-                    price <= ma_long
-                    and rsi_value <= TREND_DOWNTREND_LONG_RSI_MAX
-                    and rsi_turnup_ok_long
-                ):
-                    return "long"
+                # 하락장 롱(역추세): 가격 ≤ MA20 + RSI ≤ 설정값 (+ 옵션: RSI 턴업 시에만). 기울기 절대값 4% 미만일 때만
+                if abs(slope_pct) < TREND_COUNTER_TREND_SLOPE_MAX_PCT:
+                    rsi_turnup_ok_long = not TREND_DOWNTREND_LONG_REQUIRE_RSI_TURNUP or rsi_prev is None or rsi_value > rsi_prev
+                    if (
+                        price <= ma_long
+                        and rsi_value <= TREND_DOWNTREND_LONG_RSI_MAX
+                        and rsi_turnup_ok_long
+                    ):
+                        return "long"
                 # 하락장 숏: 가격 ≥ MA20 + RSI ≥ 설정값 (+ 옵션: RSI 턴다운 시에만)
                 rsi_turndown_ok = not TREND_DOWNTREND_SHORT_REQUIRE_RSI_TURNDOWN or rsi_prev is None or rsi_value < rsi_prev
                 if (
