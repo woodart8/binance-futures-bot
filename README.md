@@ -94,7 +94,7 @@
 
 ### 4.4 실거래: 거래소 익절/손절 미리 등록 (선택)
 
-- **`USE_EXCHANGE_TP_SL`**(`config_common`, 기본 True): 진입 직후 거래소에 **TAKE_PROFIT_LIMIT**(목표가 지정가)와 **STOP_MARKET**(손절가 시장가) 주문을 걸어 둠.
+- **`USE_EXCHANGE_TP_SL`**(`config_common`, 기본 True): 진입 직후 거래소에 **TAKE_PROFIT_MARKET**(목표가 도달 시 시장가 익절)과 **STOP_MARKET**(손절 시장가) 주문을 걸어 둠(바이낸스 USD-M).
 - 익절·손절은 **거래소가 자동 체결**하고, **박스 이탈**만 봇이 시장가로 청산(기존 TP/SL 주문 취소 후 청산).
 - False면 기존처럼 봇이 1분봉마다 익절/손절 여부를 보고 시장가 청산.
 

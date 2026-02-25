@@ -2,7 +2,7 @@
 
 - 잔고: get_balance_usdt는 total 기준. 청산은 포지션 매칭 후 contracts>0일 때만 API 호출.
 - 포지션 동기화: sync_state_from_exchange로 시작 시·매 루프 거래소 실제 포지션과 state 일치(로그와 실제 포지션 불일치 방지).
-- 거래소 TP/SL: USE_EXCHANGE_TP_SL=True면 진입 직후 TAKE_PROFIT_LIMIT(익절 지정가), STOP_MARKET(손절 시장가) 등록. 익절/손절가는 실제 포지션 체결가 기준(주문 응답 average 또는 포지션 조회).
+- 거래소 TP/SL: USE_EXCHANGE_TP_SL=True면 진입 직후 TAKE_PROFIT_MARKET(익절), STOP_MARKET(손절) 등록(바이낸스 USD-M). 익절/손절가는 실제 포지션 체결가 기준(주문 응답 average 또는 포지션 조회).
 - 로그 기준: 진입 로그(가격·목표가·손절가)는 체결가 기준. 청산 로그(진입가·수익률·손익)와 [1분] 상태 로그(진입가·목표가·손절가·미실현)는 청산/로그 시점에 fetch_positions로 조회한 실제 포지션 기준.
 """
 
@@ -55,9 +55,9 @@ def _place_exchange_tp_sl(
         close_side = "buy"
     tp_id, sl_id = None, None
     try:
-        # 익절: 지정가(TAKE_PROFIT_LIMIT) — 목표가 도달 시 해당 가격에 limit 체결 (슬리피지 감소)
+        # 익절: 바이낸스 USD-M은 TAKE_PROFIT_MARKET만 지원. stopPrice 도달 시 시장가 체결.
         tp_order = exchange.create_order(
-            symbol, "TAKE_PROFIT_LIMIT", close_side, amount, tp_price, {"stopPrice": tp_price, "reduceOnly": True}
+            symbol, "TAKE_PROFIT_MARKET", close_side, amount, None, {"stopPrice": tp_price, "reduceOnly": True}
         )
         tp_id = tp_order.get("id") if isinstance(tp_order, dict) else None
     except Exception as e:
