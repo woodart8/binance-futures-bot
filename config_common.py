@@ -66,6 +66,8 @@ SIDEWAYS_BOX_EXIT_MARGIN_PCT = 0.5  # 박스 상·하단 돌파(이탈) 기준: 
 
 # 실거래: 진입 시 거래소에 익절(지정가 LIMIT reduceOnly)·손절(STOP_MARKET) 미리 등록. True=거래소가 익절/손절 처리, 봇은 박스 이탈만 시장가 청산. False=봇이 1분봉마다 체크 후 시장가 청산.
 USE_EXCHANGE_TP_SL = True
+# 실거래: 손절(또는 거래소 익/손절 체결) 후 이 시간(초) 동안 재진입 불가. 0이면 비활성화.
+STOP_LOSS_ENTRY_COOLDOWN_SECONDS = 300  # 5분
 
 # 손실 한도 (paper/live에서 override 가능)
 DAILY_LOSS_LIMIT_PCT = 5.0

@@ -36,6 +36,7 @@ from config import (
     SIDEWAYS_BOX_RANGE_PCT_MIN,
     SIDEWAYS_BOX_RANGE_MIN,
     USE_EXCHANGE_TP_SL,
+    STOP_LOSS_ENTRY_COOLDOWN_SECONDS,
 )
 from data import compute_regime_15m
 from strategy_core import REGIME_KR, swing_strategy_signal, get_sideways_box_bounds
@@ -285,6 +286,7 @@ def _log_exchange_tp_sl_close(exchange, state: Dict[str, Any], new_state: Dict[s
         },
     )
     new_state["consecutive_loss_count"] = (state.get("consecutive_loss_count") or 0) + 1 if pnl < 0 else 0
+    new_state["last_stop_loss_time"] = time.time()
 
 
 # 바이낸스 선물 fetch_positions 반환 symbol이 "BTC/USDT" 또는 "BTC/USDT:USDT" 등으로 올 수 있음
@@ -324,6 +326,7 @@ def init_live_state() -> Dict[str, Any]:
         "daily_start_date": "",
         "consecutive_loss_count": 0,
         "last_candle_time": None,
+        "last_stop_loss_time": None,
         "tp_order_id": None,
         "sl_order_id": None,
     }
@@ -618,6 +621,7 @@ def check_tp_sl_and_close(exchange, state: Dict[str, Any], current_price: float,
         "consecutive_loss_count": consecutive_loss_count,
         "daily_start_balance": daily_start_balance,
         "daily_start_date": daily_start_date,
+        "last_stop_loss_time": time.time() if "손절" in close_reason else state.get("last_stop_loss_time"),
         "tp_order_id": None,
         "sl_order_id": None,
     }
@@ -639,6 +643,13 @@ def try_live_entry(
     """
     if state.get("has_position"):
         return (state, False)
+
+    if STOP_LOSS_ENTRY_COOLDOWN_SECONDS > 0:
+        last_sl = state.get("last_stop_loss_time")
+        if last_sl and (time.time() - last_sl) < STOP_LOSS_ENTRY_COOLDOWN_SECONDS:
+            remain = int(STOP_LOSS_ENTRY_COOLDOWN_SECONDS - (time.time() - last_sl))
+            log(f"[진입생략] 손절 후 재진입 대기 중 (남은 시간 약 {remain}초)")
+            return (state, False)
 
     latest = df.iloc[-1]
     latest_time = latest["timestamp"]
