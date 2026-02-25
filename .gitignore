@@ -2,6 +2,7 @@
 trades_log.csv
 funding_log.csv
 paper_trade.log
+live_trade.log
 paper_balance.json
 __pycache__/
 *.pyc
