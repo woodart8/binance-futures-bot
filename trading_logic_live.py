@@ -419,10 +419,27 @@ def sync_state_from_exchange(exchange, state: Dict[str, Any]) -> Dict[str, Any]:
         "tp_order_id": None,
         "sl_order_id": None,
     }
+    # 이전에는 포지션이 있었는데 지금은 없고, TP/SL 주문 ID가 남아 있다면 익절/손절 체결로 간주하고 로그 기록
     if state.get("has_position") and (state.get("tp_order_id") or state.get("sl_order_id")):
         _log_exchange_tp_sl_close(exchange, state, new_state)
     elif state.get("has_position"):
         log("[동기화] 거래소에 포지션 없음 — state를 포지션 없음으로 맞춤", "WARNING")
+
+    # 현재 포지션이 전혀 없는 상태라면, 거래소에 남아 있는 SL 주문이 있더라도 모두 취소
+    # (수동 청산 등으로 포지션은 없는데 SL 주문만 남아 있는 상황 방지)
+    if USE_EXCHANGE_TP_SL:
+        try:
+            _, existing_sl = _get_existing_tp_sl_order_ids(exchange, SYMBOL)
+            if existing_sl:
+                try:
+                    exchange.cancel_order(existing_sl, SYMBOL)
+                    log(f"[동기화] 포지션 없음 상태에서 잔여 SL 주문 취소 (order_id={existing_sl})")
+                except Exception as e:
+                    log(f"[동기화] 잔여 SL 주문 취소 실패: {e}", "WARNING")
+        except Exception:
+            # 조회 실패 시에는 그냥 넘어감 (기존 동작 유지)
+            pass
+
     return new_state
 
 
