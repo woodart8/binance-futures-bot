@@ -1056,6 +1056,12 @@ def log_5m_status(exchange, state: Dict[str, Any], df: pd.DataFrame) -> None:
     box_high_entry = state["box_high_entry"]
     box_low_entry = state["box_low_entry"]
 
+    # 목표가/손절가 표시·장세 상세용: 한 번만 계산해 재사용
+    regime_15m, ma_long_history_for_log = None, []
+    price_history_15m, rsi_15m = [], None
+    if len(df) >= REGIME_LOOKBACK_15M * 3:
+        regime_15m, _, _, _, _, price_history_15m, rsi_15m, _, ma_long_history_for_log = compute_regime_15m(df, price)
+
     # 포지션 있으면 거래소에서 현재 진입가/방향 조회(로그는 항상 현재 포지션 기준)
     entry_price = state["entry_price"]
     is_long = state["is_long"]
@@ -1075,8 +1081,19 @@ def log_5m_status(exchange, state: Dict[str, Any], df: pd.DataFrame) -> None:
         pnl_pct = (price - entry_price) / entry_price * LEVERAGE * 100 if is_long else (entry_price - price) / entry_price * LEVERAGE * 100
         unrealized = f" 미실현={pnl_pct:+.2f}%"
         is_trend = entry_regime == "trend"
-        if is_trend and entry_trend_direction in ("up", "down"):
-            is_counter = (is_long and entry_trend_direction == "down") or (not is_long and entry_trend_direction == "up")
+        # state에 진입 시 추세 방향이 있으면 사용, 없으면 현재 봉 기준으로 추정해 표시
+        display_trend = entry_trend_direction
+        if is_trend and display_trend not in ("up", "down") and regime_15m == "trend" and ma_long_history_for_log and len(ma_long_history_for_log) >= TREND_SLOPE_BARS:
+            recent = ma_long_history_for_log[-TREND_SLOPE_BARS:]
+            start_val, end_val = recent[0], recent[-1]
+            if start_val and start_val > 0:
+                slope_pct = (end_val - start_val) / start_val * 100.0
+                if slope_pct > TREND_SLOPE_MIN_PCT:
+                    display_trend = "up"
+                elif slope_pct < -TREND_SLOPE_MIN_PCT:
+                    display_trend = "down"
+        if is_trend and display_trend in ("up", "down"):
+            is_counter = (is_long and display_trend == "down") or (not is_long and display_trend == "up")
             tp_pct = COUNTER_TREND_PROFIT_TARGET if is_counter else TREND_PROFIT_TARGET
             sl_pct = COUNTER_TREND_STOP_LOSS_PRICE if is_counter else TREND_STOP_LOSS_PRICE
         else:
@@ -1095,24 +1112,19 @@ def log_5m_status(exchange, state: Dict[str, Any], df: pd.DataFrame) -> None:
     if has_position and entry_regime == "sideways" and box_high_entry > 0 and box_low_entry > 0:
         box_str = f" | 박스 하단={box_low_entry:.2f} 상단={box_high_entry:.2f}"
     
-    # 현재 장세 판단 및 상세 정보 계산
+    # 현재 장세 판단 및 상세 정보 계산 (위에서 한 번 계산한 regime_15m·ma_long_history_for_log·price_history_15m·rsi_15m 재사용)
     regime_detail = ""
-    rsi_15m = None
-    if len(df) >= REGIME_LOOKBACK_15M * 3:
-        regime, short_ma_15m, long_ma_15m, ma_50_15m, ma_100_15m, price_history_15m, rsi_15m, rsi_15m_prev, ma_long_history = compute_regime_15m(df, price)
-        
-        if regime == "trend":
-            # 추세장: MA20 기울기 정보
-            if ma_long_history and len(ma_long_history) >= TREND_SLOPE_BARS:
-                recent_ma20 = ma_long_history[-TREND_SLOPE_BARS:]
+    if regime_15m is not None:
+        if regime_15m == "trend":
+            if ma_long_history_for_log and len(ma_long_history_for_log) >= TREND_SLOPE_BARS:
+                recent_ma20 = ma_long_history_for_log[-TREND_SLOPE_BARS:]
                 ma20_start = recent_ma20[0]
                 ma20_end = recent_ma20[-1]
                 if ma20_start and ma20_start > 0:
                     slope_pct = (ma20_end - ma20_start) / ma20_start * 100.0
                     trend_dir = "상승" if slope_pct > 0 else "하락"
                     regime_detail = f" | 추세장({trend_dir}): MA20 기울기 {slope_pct:+.2f}% (기준 ±{TREND_SLOPE_MIN_PCT}%)"
-        elif regime == "sideways":
-            # 횡보장: 박스 정보
+        elif regime_15m == "sideways":
             bounds = get_sideways_box_bounds(price_history_15m, REGIME_LOOKBACK_15M)
             if bounds:
                 box_high, box_low = bounds
@@ -1120,7 +1132,7 @@ def log_5m_status(exchange, state: Dict[str, Any], df: pd.DataFrame) -> None:
                 box_range_pct = box_range / box_low * 100 if box_low > 0 else 0
                 price_pos = (price - box_low) / box_range * 100 if box_range > 0 else 0
                 regime_detail = f" | 횡보장: 박스 하단={box_low:.2f} 상단={box_high:.2f} 폭={box_range_pct:.2f}% 가격위치={price_pos:.1f}%"
-        elif regime == "neutral":
+        elif regime_15m == "neutral":
             regime_detail = " | 중립"
     else:
         regime_detail = " | 중립: 데이터 부족"
