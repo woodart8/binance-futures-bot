@@ -40,35 +40,69 @@ from exit_logic import check_long_exit, check_short_exit, reason_to_display_mess
 from trade_logger import log_trade
 from logger import log
 
-def _place_exchange_tp_sl(
-    exchange, symbol: str, is_long: bool, amount: float, entry_price: float, tp_pct: float, sl_pct: float
-) -> Tuple[str, str]:
-    """진입 후 거래소에 익절/손절 주문 등록. 반환: (tp_order_id, sl_order_id). 실패 시 (None, None)."""
+def _get_existing_tp_sl_order_ids(exchange, symbol: str) -> Tuple[str, str]:
+    """거래소 미체결 주문에서 익절(TAKE_PROFIT_MARKET)·손절(STOP_MARKET) 주문 ID 반환. (tp_id, sl_id), 없으면 ""."""
+    tp_id, sl_id = "", ""
+    try:
+        orders = exchange.fetch_open_orders(symbol)
+        for o in orders:
+            t = (o.get("type") or o.get("info", {}).get("type") or "").upper()
+            oid = o.get("id") or o.get("info", {}).get("orderId")
+            if not oid:
+                continue
+            if "TAKE_PROFIT" in t:
+                tp_id = str(oid)
+            elif t == "STOP_MARKET" or (t == "STOP" and (o.get("info", {}).get("type") or "").upper() == "STOP_MARKET"):
+                sl_id = str(oid)
+    except Exception as e:
+        log(f"미체결 주문 조회 실패: {e}", "WARNING")
+    return (tp_id, sl_id)
+
+
+def _place_tp_order(exchange, symbol: str, is_long: bool, amount: float, entry_price: float, tp_pct: float) -> str:
+    """익절 주문 1개만 등록. 반환: order_id 또는 ""."""
     pct_per_leverage = 1.0 / LEVERAGE
     if is_long:
         tp_price = entry_price * (1 + tp_pct / 100 * pct_per_leverage)
-        sl_price = entry_price * (1 - sl_pct / 100 * pct_per_leverage)
         close_side = "sell"
     else:
         tp_price = entry_price * (1 - tp_pct / 100 * pct_per_leverage)
-        sl_price = entry_price * (1 + sl_pct / 100 * pct_per_leverage)
         close_side = "buy"
-    tp_id, sl_id = None, None
     try:
-        # 익절: 바이낸스 USD-M은 TAKE_PROFIT_MARKET만 지원. stopPrice 도달 시 시장가 체결.
         tp_order = exchange.create_order(
             symbol, "TAKE_PROFIT_MARKET", close_side, amount, None, {"stopPrice": tp_price, "reduceOnly": True}
         )
-        tp_id = tp_order.get("id") if isinstance(tp_order, dict) else None
+        return (tp_order.get("id") or "") if isinstance(tp_order, dict) else ""
     except Exception as e:
         log(f"익절 주문 등록 실패: {e}", "WARNING")
+        return ""
+
+
+def _place_sl_order(exchange, symbol: str, is_long: bool, amount: float, entry_price: float, sl_pct: float) -> str:
+    """손절 주문 1개만 등록. 반환: order_id 또는 ""."""
+    pct_per_leverage = 1.0 / LEVERAGE
+    if is_long:
+        sl_price = entry_price * (1 - sl_pct / 100 * pct_per_leverage)
+        close_side = "sell"
+    else:
+        sl_price = entry_price * (1 + sl_pct / 100 * pct_per_leverage)
+        close_side = "buy"
     try:
         sl_order = exchange.create_order(
             symbol, "STOP_MARKET", close_side, amount, None, {"stopPrice": sl_price, "reduceOnly": True}
         )
-        sl_id = sl_order.get("id") if isinstance(sl_order, dict) else None
+        return (sl_order.get("id") or "") if isinstance(sl_order, dict) else ""
     except Exception as e:
         log(f"손절 주문 등록 실패: {e}", "WARNING")
+        return ""
+
+
+def _place_exchange_tp_sl(
+    exchange, symbol: str, is_long: bool, amount: float, entry_price: float, tp_pct: float, sl_pct: float
+) -> Tuple[str, str]:
+    """진입 후 거래소에 익절/손절 주문 등록. 반환: (tp_order_id, sl_order_id). 실패 시 (None, None)."""
+    tp_id = _place_tp_order(exchange, symbol, is_long, amount, entry_price, tp_pct)
+    sl_id = _place_sl_order(exchange, symbol, is_long, amount, entry_price, sl_pct)
     return (tp_id or "", sl_id or "")
 
 
@@ -182,6 +216,7 @@ def init_live_state() -> Dict[str, Any]:
 def sync_state_from_exchange(exchange, state: Dict[str, Any]) -> Dict[str, Any]:
     """
     거래소 실제 포지션을 조회해 state를 맞춤. 재시작·수동 청산 등으로 로그와 실제가 어긋나는 것을 방지.
+    포지션을 처음 발견할 때(has_position이 False였다가 포지션 있음): USE_EXCHANGE_TP_SL이면 미체결 주문 조회 후 이미 있는 TP/SL은 유지, 없는 것만 추가 등록.
     반환: 업데이트된 state (포지션 없으면 has_position=False, 있으면 entry_price 등 채움).
     """
     try:
@@ -214,18 +249,44 @@ def sync_state_from_exchange(exchange, state: Dict[str, Any]) -> Dict[str, Any]:
         lowest = entry_price if not is_long else (state.get("lowest_price", float("inf")) if state.get("lowest_price") != float("inf") else float("inf"))
         if not is_long and state.get("lowest_price") is not None and state.get("lowest_price") != float("inf"):
             lowest = min(entry_price, state["lowest_price"])
+        entry_regime = state.get("entry_regime") or "trend"
+        tp_oid = state.get("tp_order_id") or ""
+        sl_oid = state.get("sl_order_id") or ""
+        # 포지션을 처음 발견할 때만: 거래소에 이미 있는 TP/SL은 유지하고, 없는 것만 추가 등록.
+        if USE_EXCHANGE_TP_SL and not state.get("has_position"):
+            existing_tp, existing_sl = _get_existing_tp_sl_order_ids(exchange, SYMBOL)
+            if existing_tp:
+                tp_oid = existing_tp
+            if existing_sl:
+                sl_oid = existing_sl
+            is_trend = entry_regime == "trend"
+            tp_pct = TREND_PROFIT_TARGET if is_trend else SIDEWAYS_PROFIT_TARGET
+            sl_pct = TREND_STOP_LOSS_PRICE if is_trend else SIDEWAYS_STOP_LOSS_PRICE
+            added = []
+            if not tp_oid:
+                tp_oid = _place_tp_order(exchange, SYMBOL, is_long, contracts, entry_price, tp_pct)
+                if tp_oid:
+                    added.append("익절")
+            if not sl_oid:
+                sl_oid = _place_sl_order(exchange, SYMBOL, is_long, contracts, entry_price, sl_pct)
+                if sl_oid:
+                    added.append("손절")
+            if added:
+                log(f"[동기화] 기존 포지션 TP/SL 추가 등록 ({', '.join(added)}) | 진입가={entry_price:.2f} 수량={contracts}")
         state = {
             **state,
             "has_position": True,
             "is_long": is_long,
             "entry_price": entry_price,
             "entry_balance": state.get("entry_balance") or balance,
-            "entry_regime": state.get("entry_regime") or "trend",
+            "entry_regime": entry_regime,
             "box_high_entry": state.get("box_high_entry") or 0.0,
             "box_low_entry": state.get("box_low_entry") or 0.0,
             "highest_price": highest,
             "lowest_price": lowest,
             "best_pnl_pct": state.get("best_pnl_pct", 0.0),
+            "tp_order_id": tp_oid,
+            "sl_order_id": sl_oid,
         }
         return state
 
