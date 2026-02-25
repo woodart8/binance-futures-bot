@@ -226,6 +226,63 @@ def _get_current_position_for_log(exchange) -> Tuple[float, bool]:
     return (0.0, False)
 
 
+def _get_last_close_trade_price(exchange, symbol: str, is_long: bool) -> float:
+    """방금 청산된 포지션의 체결가(평균). 최근 체결 내역에서 청산 방향(sell=롱청산, buy=숏청산) 거래 1건 가격 반환. 없으면 0."""
+    try:
+        trades = exchange.fetch_my_trades(symbol, limit=30)
+        if not trades:
+            return 0.0
+        # 최신이 마지막일 수 있음. 청산 = 롱이면 sell, 숏이면 buy
+        close_side = "sell" if is_long else "buy"
+        for t in reversed(trades):
+            side = (t.get("side") or "").lower()
+            if side != close_side:
+                continue
+            price = float(t.get("price") or t.get("average") or 0)
+            if price > 0:
+                return price
+        return 0.0
+    except Exception:
+        return 0.0
+
+
+def _log_exchange_tp_sl_close(exchange, state: Dict[str, Any], new_state: Dict[str, Any]) -> None:
+    """거래소에서 익절/손절이 체결된 경우 청산 로그 및 log_trade(CSV) 기록."""
+    entry_price = state.get("entry_price") or 0.0
+    entry_balance = state.get("entry_balance") or 0.0
+    entry_regime = state.get("entry_regime") or "trend"
+    is_long = state.get("is_long", True)
+    try:
+        new_balance = get_balance_usdt(exchange)
+    except Exception:
+        new_balance = entry_balance
+    pnl = new_balance - entry_balance
+    exit_price = _get_last_close_trade_price(exchange, SYMBOL, is_long)
+    if exit_price <= 0:
+        exit_price = entry_price
+    pnl_pct = (exit_price - entry_price) / entry_price * LEVERAGE * 100 if is_long else (entry_price - exit_price) / entry_price * LEVERAGE * 100
+    side_str = "LONG" if is_long else "SHORT"
+    regime_kr = REGIME_KR.get(entry_regime, entry_regime)
+    close_reason = "거래소 익절/손절 체결"
+    log(f"{side_str} 청산 | {regime_kr} | {close_reason} | 진입={entry_price:.2f} 청산={exit_price:.2f} 수익률={pnl_pct:+.2f}% 손익={pnl:+.2f} 잔고={new_balance:.2f}")
+    log_trade(
+        side=side_str,
+        entry_price=entry_price,
+        exit_price=exit_price,
+        pnl=pnl,
+        balance_after=new_balance,
+        meta={
+            "timeframe": TIMEFRAME,
+            "symbol": SYMBOL,
+            "mode": "live",
+            "regime": entry_regime,
+            "pnl_pct": round(pnl_pct, 2),
+            "reason": close_reason,
+        },
+    )
+    new_state["consecutive_loss_count"] = (state.get("consecutive_loss_count") or 0) + 1 if pnl < 0 else 0
+
+
 # 바이낸스 선물 fetch_positions 반환 symbol이 "BTC/USDT" 또는 "BTC/USDT:USDT" 등으로 올 수 있음
 def _position_matches(pos: dict, symbol: str, side: str) -> bool:
     ps = (pos.get("symbol") or "").strip()
@@ -345,10 +402,8 @@ def sync_state_from_exchange(exchange, state: Dict[str, Any]) -> Dict[str, Any]:
         }
         return state
 
-    # 포지션 없음 → state도 포지션 없음으로
-    if state.get("has_position"):
-        log("[동기화] 거래소에 포지션 없음 — state를 포지션 없음으로 맞춤", "WARNING")
-    return {
+    # 포지션 없음 → state도 포지션 없음으로. 거래소에서 익절/손절 체결됐으면 청산 로그 + CSV 기록.
+    new_state = {
         **state,
         "has_position": False,
         "is_long": False,
@@ -362,6 +417,11 @@ def sync_state_from_exchange(exchange, state: Dict[str, Any]) -> Dict[str, Any]:
         "tp_order_id": None,
         "sl_order_id": None,
     }
+    if state.get("has_position") and (state.get("tp_order_id") or state.get("sl_order_id")):
+        _log_exchange_tp_sl_close(exchange, state, new_state)
+    elif state.get("has_position"):
+        log("[동기화] 거래소에 포지션 없음 — state를 포지션 없음으로 맞춤", "WARNING")
+    return new_state
 
 
 def check_tp_sl_and_close(exchange, state: Dict[str, Any], current_price: float, df: pd.DataFrame) -> Tuple[Dict[str, Any], bool]:
