@@ -2,7 +2,8 @@
 
 - 잔고: get_balance_usdt는 total 기준. 청산은 포지션 매칭 후 contracts>0일 때만 API 호출.
 - 포지션 동기화: sync_state_from_exchange로 시작 시·매 루프 거래소 실제 포지션과 state 일치(로그와 실제 포지션 불일치 방지).
-- 거래소 TP/SL: USE_EXCHANGE_TP_SL=True면 진입 직후 TAKE_PROFIT_LIMIT(익절 지정가), STOP_MARKET(손절 시장가) 등록. 익절/손절은 거래소가 처리, 박스 이탈만 봇이 TP/SL 취소 후 시장가 청산.
+- 거래소 TP/SL: USE_EXCHANGE_TP_SL=True면 진입 직후 TAKE_PROFIT_LIMIT(익절 지정가), STOP_MARKET(손절 시장가) 등록. 익절/손절가는 실제 포지션 체결가 기준(주문 응답 average 또는 포지션 조회).
+- 로그 기준: 진입 로그(가격·목표가·손절가)는 체결가 기준. 청산 로그(진입가·수익률·손익)와 [1분] 상태 로그(진입가·목표가·손절가·미실현)는 청산/로그 시점에 fetch_positions로 조회한 실제 포지션 기준.
 """
 
 import time
@@ -71,6 +72,37 @@ def _place_exchange_tp_sl(
     return (tp_id or "", sl_id or "")
 
 
+def _get_entry_price_after_order(
+    exchange, symbol: str, is_long: bool, order_response: dict, fallback_price: float
+) -> float:
+    """진입 시장가 주문 후 실제 체결가 반환. 주문 응답의 average/price 우선, 없으면 포지션 조회, 둘 다 없으면 fallback."""
+    if isinstance(order_response, dict):
+        avg = order_response.get("average")
+        if avg is not None and float(avg) > 0:
+            return float(avg)
+        price = order_response.get("price")
+        if price is not None and float(price) > 0:
+            return float(price)
+    try:
+        positions = exchange.fetch_positions([symbol])
+        side = "long" if is_long else "short"
+        for pos in positions:
+            if not _position_matches(pos, symbol, side):
+                continue
+            contracts = float(pos.get("contracts", 0) or 0) or abs(
+                float(pos.get("positionAmt", 0) or pos.get("info", {}).get("positionAmt", 0) or 0)
+            )
+            if contracts <= 0:
+                continue
+            entry_price = float(pos.get("entryPrice", 0) or pos.get("info", {}).get("entryPrice", 0) or 0)
+            if entry_price > 0:
+                return entry_price
+            return float(pos.get("markPrice", 0) or pos.get("info", {}).get("markPrice", 0) or 0)
+    except Exception:
+        pass
+    return fallback_price
+
+
 def _cancel_tp_sl_orders(exchange, symbol: str, state: Dict[str, Any]) -> None:
     """박스 이탈 등으로 시장가 청산 전, 걸어둔 익절/손절 주문 취소."""
     for key in ("tp_order_id", "sl_order_id"):
@@ -81,6 +113,28 @@ def _cancel_tp_sl_orders(exchange, symbol: str, state: Dict[str, Any]) -> None:
             exchange.cancel_order(oid, symbol)
         except Exception:
             pass
+
+
+def _get_current_position_for_log(exchange) -> Tuple[float, bool]:
+    """로그용: 거래소 현재 포지션의 진입가, 방향. 포지션 없거나 조회 실패 시 (0.0, False)."""
+    try:
+        positions = exchange.fetch_positions([SYMBOL])
+        for pos in positions:
+            if not _position_matches(pos, SYMBOL, "long") and not _position_matches(pos, SYMBOL, "short"):
+                continue
+            contracts = float(pos.get("contracts", 0) or 0) or abs(
+                float(pos.get("positionAmt", 0) or pos.get("info", {}).get("positionAmt", 0) or 0)
+            )
+            if contracts <= 0:
+                continue
+            entry_price = float(pos.get("entryPrice", 0) or pos.get("info", {}).get("entryPrice", 0) or 0)
+            if entry_price <= 0:
+                entry_price = float(pos.get("markPrice", 0) or pos.get("info", {}).get("markPrice", 0) or 0)
+            is_long = pos.get("side", "").lower() == "long"
+            return (entry_price, is_long)
+    except Exception:
+        pass
+    return (0.0, False)
 
 
 # 바이낸스 선물 fetch_positions 반환 symbol이 "BTC/USDT" 또는 "BTC/USDT:USDT" 등으로 올 수 있음
@@ -198,7 +252,8 @@ def check_tp_sl_and_close(exchange, state: Dict[str, Any], current_price: float,
     """
     새 5분봉이 뜬 뒤, 전봉 종가 기준 익절/손절 조건 만족 시 청산.
     포지션은 _position_matches로 심볼/사이드 매칭(바이낸스 BTC/USDT:USDT 등), 수량은 contracts 또는 positionAmt.
-    contracts<=0이면 주문 없이 return(청산생략 로그만). 반환: (업데이트된 state, did_close).
+    contracts<=0이면 주문 없이 return(청산생략 로그만). 청산 로그의 진입가·수익률은 fetch한 포지션 entryPrice 기준.
+    반환: (업데이트된 state, did_close).
     """
     if not state.get("has_position"):
         return (state, False)
@@ -284,12 +339,16 @@ def check_tp_sl_and_close(exchange, state: Dict[str, Any], current_price: float,
         return (state, False)
 
     contracts = 0.0
+    entry_price_actual = entry_price  # 로그는 실제 포지션 기준
     side_to_close = "long" if is_long else "short"
     for pos in positions:
         if _position_matches(pos, SYMBOL, side_to_close):
             contracts = float(pos.get("contracts", 0) or 0)
             if contracts <= 0:
                 contracts = abs(float(pos.get("positionAmt", 0) or pos.get("info", {}).get("positionAmt", 0) or 0))
+            ep = float(pos.get("entryPrice", 0) or pos.get("info", {}).get("entryPrice", 0) or 0)
+            if ep > 0:
+                entry_price_actual = ep
             break
 
     if contracts <= 0:
@@ -317,13 +376,13 @@ def check_tp_sl_and_close(exchange, state: Dict[str, Any], current_price: float,
         consecutive_loss_count += 1
     else:
         consecutive_loss_count = 0
-    pnl_pct_final = (current_price - entry_price) / entry_price * LEVERAGE * 100 if is_long else (entry_price - current_price) / entry_price * LEVERAGE * 100
+    pnl_pct_final = (current_price - entry_price_actual) / entry_price_actual * LEVERAGE * 100 if is_long else (entry_price_actual - current_price) / entry_price_actual * LEVERAGE * 100
     side_str = "LONG" if is_long else "SHORT"
     regime_kr = REGIME_KR.get(entry_regime, entry_regime)
-    log(f"{side_str} 청산 | {regime_kr} | {close_reason} | 진입={entry_price:.2f} 청산={current_price:.2f} 수익률={pnl_pct_final:+.2f}% 손익={pnl:+.2f} 잔고={new_balance:.2f}")
+    log(f"{side_str} 청산 | {regime_kr} | {close_reason} | 진입={entry_price_actual:.2f} 청산={current_price:.2f} 수익률={pnl_pct_final:+.2f}% 손익={pnl:+.2f} 잔고={new_balance:.2f}")
     log_trade(
         side="LONG" if is_long else "SHORT",
-        entry_price=entry_price,
+        entry_price=entry_price_actual,
         exit_price=current_price,
         pnl=pnl,
         balance_after=new_balance,
@@ -457,17 +516,18 @@ def try_live_entry(
 
     try:
         if signal == "long":
-            exchange.create_market_buy_order(SYMBOL, amount)
+            order = exchange.create_market_buy_order(SYMBOL, amount)
+            entry_price_actual = _get_entry_price_after_order(exchange, SYMBOL, True, order, current_price)
             regime_kr = REGIME_KR.get(regime, regime)
             is_trend = regime == "trend"
             tp_pct = TREND_PROFIT_TARGET if is_trend else SIDEWAYS_PROFIT_TARGET
             sl_pct = TREND_STOP_LOSS_PRICE if is_trend else SIDEWAYS_STOP_LOSS_PRICE
             pct_per_leverage = 1.0 / LEVERAGE
-            tg = current_price * (1 + tp_pct / 100 * pct_per_leverage)
-            st = current_price * (1 - sl_pct / 100 * pct_per_leverage)
+            tg = entry_price_actual * (1 + tp_pct / 100 * pct_per_leverage)
+            st = entry_price_actual * (1 - sl_pct / 100 * pct_per_leverage)
             tp_oid, sl_oid = "", ""
             if USE_EXCHANGE_TP_SL:
-                tp_oid, sl_oid = _place_exchange_tp_sl(exchange, SYMBOL, True, amount, current_price, tp_pct, sl_pct)
+                tp_oid, sl_oid = _place_exchange_tp_sl(exchange, SYMBOL, True, amount, entry_price_actual, tp_pct, sl_pct)
             entry_tp_sl = f" 목표가={tg:.2f} 손절가={st:.2f}"
             if USE_EXCHANGE_TP_SL and (tp_oid or sl_oid):
                 entry_tp_sl += " (거래소 TP/SL 등록)"
@@ -479,13 +539,13 @@ def try_live_entry(
                 box_high_entry, box_low_entry = bh, bl
             else:
                 box_high_entry, box_low_entry = 0.0, 0.0
-            log(f"LONG 진입 | {regime_kr} | 가격={current_price:.2f} 잔고={balance:.2f} 투입={order_usdt:.2f} USDT{entry_tp_sl}{box_str}")
+            log(f"LONG 진입 | {regime_kr} | 가격={entry_price_actual:.2f} 잔고={balance:.2f} 투입={order_usdt:.2f} USDT{entry_tp_sl}{box_str}")
             new_state = {
                 **state,
                 "has_position": True,
                 "is_long": True,
-                "entry_price": current_price,
-                "highest_price": current_price,
+                "entry_price": entry_price_actual,
+                "highest_price": entry_price_actual,
                 "entry_regime": regime,
                 "entry_balance": balance,
                 "best_pnl_pct": 0.0,
@@ -499,17 +559,18 @@ def try_live_entry(
                 "sl_order_id": sl_oid,
             }
         else:
-            exchange.create_market_sell_order(SYMBOL, amount)
+            order = exchange.create_market_sell_order(SYMBOL, amount)
+            entry_price_actual = _get_entry_price_after_order(exchange, SYMBOL, False, order, current_price)
             regime_kr = REGIME_KR.get(regime, regime)
             is_trend = regime == "trend"
             tp_pct = TREND_PROFIT_TARGET if is_trend else SIDEWAYS_PROFIT_TARGET
             sl_pct = TREND_STOP_LOSS_PRICE if is_trend else SIDEWAYS_STOP_LOSS_PRICE
             pct_per_leverage = 1.0 / LEVERAGE
-            tg = current_price * (1 - tp_pct / 100 * pct_per_leverage)
-            st = current_price * (1 + sl_pct / 100 * pct_per_leverage)
+            tg = entry_price_actual * (1 - tp_pct / 100 * pct_per_leverage)
+            st = entry_price_actual * (1 + sl_pct / 100 * pct_per_leverage)
             tp_oid, sl_oid = "", ""
             if USE_EXCHANGE_TP_SL:
-                tp_oid, sl_oid = _place_exchange_tp_sl(exchange, SYMBOL, False, amount, current_price, tp_pct, sl_pct)
+                tp_oid, sl_oid = _place_exchange_tp_sl(exchange, SYMBOL, False, amount, entry_price_actual, tp_pct, sl_pct)
             entry_tp_sl = f" 목표가={tg:.2f} 손절가={st:.2f}"
             if USE_EXCHANGE_TP_SL and (tp_oid or sl_oid):
                 entry_tp_sl += " (거래소 TP/SL 등록)"
@@ -521,13 +582,13 @@ def try_live_entry(
                 box_high_entry, box_low_entry = bh, bl
             else:
                 box_high_entry, box_low_entry = 0.0, 0.0
-            log(f"SHORT 진입 | {regime_kr} | 가격={current_price:.2f} 잔고={balance:.2f} 투입={order_usdt:.2f} USDT{entry_tp_sl}{box_str}")
+            log(f"SHORT 진입 | {regime_kr} | 가격={entry_price_actual:.2f} 잔고={balance:.2f} 투입={order_usdt:.2f} USDT{entry_tp_sl}{box_str}")
             new_state = {
                 **state,
                 "has_position": True,
                 "is_long": False,
-                "entry_price": current_price,
-                "lowest_price": current_price,
+                "entry_price": entry_price_actual,
+                "lowest_price": entry_price_actual,
                 "entry_regime": regime,
                 "entry_balance": balance,
                 "best_pnl_pct": 0.0,
@@ -549,6 +610,7 @@ def try_live_entry(
 def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tuple[Dict[str, Any], bool, bool]:
     """
     새 5분봉이 뜬 뒤, 전봉 종가 기준 익절/손절/박스이탈 판단 후 청산 주문 실행.
+    청산 로그의 진입가·수익률은 fetch한 포지션 entryPrice 기준.
     반환: (업데이트된 state, skip, did_close)
     skip=True 이면 60초 대기 후 재조회. did_close=True 이면 해당 턴에 5분 로그 생략.
     """
@@ -648,12 +710,16 @@ def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tu
             return (state, True, False)
 
         contracts = 0.0
+        entry_price_actual = entry_price  # 로그/CSV는 실제 포지션 기준
         side_to_close = "long" if is_long else "short"
         for pos in positions:
             if _position_matches(pos, SYMBOL, side_to_close):
                 contracts = float(pos.get("contracts", 0) or 0)
                 if contracts <= 0:
                     contracts = abs(float(pos.get("positionAmt", 0) or pos.get("info", {}).get("positionAmt", 0) or 0))
+                ep = float(pos.get("entryPrice", 0) or pos.get("info", {}).get("entryPrice", 0) or 0)
+                if ep > 0:
+                    entry_price_actual = ep
                 break
 
         if contracts <= 0:
@@ -681,13 +747,13 @@ def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tu
             consecutive_loss_count += 1
         else:
             consecutive_loss_count = 0
-        pnl_pct = (price - entry_price) / entry_price * LEVERAGE * 100 if is_long else (entry_price - price) / entry_price * LEVERAGE * 100
+        pnl_pct = (price - entry_price_actual) / entry_price_actual * LEVERAGE * 100 if is_long else (entry_price_actual - price) / entry_price_actual * LEVERAGE * 100
         side_str = "LONG" if is_long else "SHORT"
         regime_kr = REGIME_KR.get(entry_regime, entry_regime)
-        log(f"{side_str} 청산 | {regime_kr} | {close_reason} | 진입={entry_price:.2f} 청산={price:.2f} 수익률={pnl_pct:+.2f}% 손익={pnl:+.2f} 잔고={new_balance:.2f}")
+        log(f"{side_str} 청산 | {regime_kr} | {close_reason} | 진입={entry_price_actual:.2f} 청산={price:.2f} 수익률={pnl_pct:+.2f}% 손익={pnl:+.2f} 잔고={new_balance:.2f}")
         log_trade(
             side="LONG" if is_long else "SHORT",
-            entry_price=entry_price,
+            entry_price=entry_price_actual,
             exit_price=price,
             pnl=pnl,
             balance_after=new_balance,
@@ -737,16 +803,22 @@ def process_live_candle(exchange, state: Dict[str, Any], df: pd.DataFrame) -> Tu
 
 
 def log_5m_status(exchange, state: Dict[str, Any], df: pd.DataFrame) -> None:
-    """1분봉 생길 때마다 상태 로그 (pos_status, regime, box, 가격, RSI, 잔고, 미실현)."""
+    """1분봉 생길 때마다 상태 로그. 포지션/진입가/목표가/손절가/미실현 PnL은 거래소 현재 포지션 기준."""
     latest = df.iloc[-1]
     price = float(latest["close"])
     rsi_5m = float(latest["rsi"])
     has_position = state["has_position"]
-    is_long = state["is_long"]
-    entry_price = state["entry_price"]
     entry_regime = state["entry_regime"]
     box_high_entry = state["box_high_entry"]
     box_low_entry = state["box_low_entry"]
+
+    # 포지션 있으면 거래소에서 현재 진입가/방향 조회(로그는 항상 현재 포지션 기준)
+    entry_price = state["entry_price"]
+    is_long = state["is_long"]
+    if has_position:
+        ex_entry, ex_long = _get_current_position_for_log(exchange)
+        if ex_entry > 0:
+            entry_price, is_long = ex_entry, ex_long
 
     try:
         bal = get_balance_usdt(exchange)
@@ -754,9 +826,21 @@ def log_5m_status(exchange, state: Dict[str, Any], df: pd.DataFrame) -> None:
         bal = 0.0
     pos_status = "LONG" if has_position and is_long else ("SHORT" if has_position else "NONE")
     unrealized = ""
-    if has_position:
+    pos_detail = ""  # 진입가·목표가·손절가
+    if has_position and entry_price > 0:
         pnl_pct = (price - entry_price) / entry_price * LEVERAGE * 100 if is_long else (entry_price - price) / entry_price * LEVERAGE * 100
         unrealized = f" 미실현={pnl_pct:+.2f}%"
+        is_trend = entry_regime == "trend"
+        tp_pct = TREND_PROFIT_TARGET if is_trend else SIDEWAYS_PROFIT_TARGET
+        sl_pct = TREND_STOP_LOSS_PRICE if is_trend else SIDEWAYS_STOP_LOSS_PRICE
+        pct_per_leverage = 1.0 / LEVERAGE
+        if is_long:
+            tg = entry_price * (1 + tp_pct / 100 * pct_per_leverage)
+            st = entry_price * (1 - sl_pct / 100 * pct_per_leverage)
+        else:
+            tg = entry_price * (1 - tp_pct / 100 * pct_per_leverage)
+            st = entry_price * (1 + sl_pct / 100 * pct_per_leverage)
+        pos_detail = f" 진입가={entry_price:.2f} 목표가={tg:.2f} 손절가={st:.2f}"
     regime_str = f" | {REGIME_KR.get(entry_regime, entry_regime)}" if has_position and entry_regime else ""
     box_str = ""
     if has_position and entry_regime == "sideways" and box_high_entry > 0 and box_low_entry > 0:
@@ -794,4 +878,4 @@ def log_5m_status(exchange, state: Dict[str, Any], df: pd.DataFrame) -> None:
 
     # RSI 표시는 15분봉 기준(rsi_15m)이 있으면 그 값을, 없으면 5분봉 RSI를 사용
     rsi_display = float(rsi_15m) if rsi_15m is not None else rsi_5m
-    log(f"[1분] {pos_status}{regime_str}{box_str}{regime_detail} | 가격={price:.2f} RSI={rsi_display:.0f} 잔고={bal:.2f}{unrealized}")
+    log(f"[1분] {pos_status}{regime_str}{box_str}{pos_detail}{regime_detail} | 가격={price:.2f} RSI={rsi_display:.0f} 잔고={bal:.2f}{unrealized}")
