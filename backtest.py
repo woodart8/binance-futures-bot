@@ -364,9 +364,11 @@ def run_backtest(df: pd.DataFrame, exchange=None, candle_tf: str = "5m") -> Back
         if i >= SIDEWAYS_BOX_PERIOD:
             seg = df.iloc[i - SIDEWAYS_BOX_PERIOD:i + 1]
             price_history = list(zip(seg["high"].tolist(), seg["low"].tolist(), seg["close"].tolist()))
+            rsi_history = seg["rsi"].tolist()
         else:
             seg = df.iloc[:i + 1]
             price_history = list(zip(seg["high"].tolist(), seg["low"].tolist(), seg["close"].tolist()))
+            rsi_history = seg["rsi"].tolist()
         
         # 일일 손실 한도: 날짜 변경 시 daily_start_balance 갱신
         ts = row.get("timestamp")
@@ -412,6 +414,7 @@ def run_backtest(df: pd.DataFrame, exchange=None, candle_tf: str = "5m") -> Back
             regime_ma_100=regime_ma100,
             regime_price_history=price_history_15m if use_15m_sideways else None,
             regime_ma_long_history=ma_long_history if use_15m_trend else None,
+            rsi_history=rsi_history,
         )
         
         # 진입 시 추세 방향 (추세장일 때만: 상승=up, 하락=down)
@@ -821,9 +824,11 @@ def _run_backtest_1m(df_1m: pd.DataFrame, exchange=None) -> BacktestResult:
         if idx_5m >= SIDEWAYS_BOX_PERIOD:
             seg_5m = df_5m.iloc[idx_5m - SIDEWAYS_BOX_PERIOD : idx_5m + 1]
             price_history = list(zip(seg_5m["high"].tolist(), seg_5m["low"].tolist(), seg_5m["close"].tolist()))
+            rsi_history = seg_5m["rsi"].tolist()
         else:
             seg_5m = df_5m.iloc[: idx_5m + 1]
             price_history = list(zip(seg_5m["high"].tolist(), seg_5m["low"].tolist(), seg_5m["close"].tolist()))
+            rsi_history = seg_5m["rsi"].tolist()
 
         ts = row.get("timestamp")
         current_date = ts.strftime("%Y-%m-%d") if hasattr(ts, "strftime") else str(ts)[:10] if ts is not None else ""
@@ -863,6 +868,7 @@ def _run_backtest_1m(df_1m: pd.DataFrame, exchange=None) -> BacktestResult:
             regime_ma_100=regime_ma100,
             regime_price_history=price_history_15m if use_15m_sideways else None,
             regime_ma_long_history=ma_long_history if use_15m_trend else None,
+            rsi_history=rsi_history,
         )
 
         trend_direction = ""

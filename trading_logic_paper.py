@@ -404,8 +404,10 @@ def try_paper_entry(state: PaperState, df: pd.DataFrame, current_price: float) -
     if len(df) >= SIDEWAYS_BOX_PERIOD:
         tail = df.tail(SIDEWAYS_BOX_PERIOD + 1)
         price_history = list(zip(tail["high"].tolist(), tail["low"].tolist(), tail["close"].tolist()))
+        rsi_history = tail["rsi"].tolist()
     else:
         price_history = None
+        rsi_history = None
     use_15m = len(price_history_15m) >= REGIME_LOOKBACK_15M
     regime_price_hist = price_history_15m if (use_15m and regime == "sideways") else None
     rsi_value = float(rsi_15m) if (use_15m and rsi_15m is not None) else rsi
@@ -430,6 +432,7 @@ def try_paper_entry(state: PaperState, df: pd.DataFrame, current_price: float) -
         regime_ma_100=ma_100_15m if use_15m else None,
         regime_price_history=regime_price_hist,
         regime_ma_long_history=ma_long_history if use_15m else None,
+        rsi_history=rsi_history,
     )
     if signal not in ("long", "short"):
         return False

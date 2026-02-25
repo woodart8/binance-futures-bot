@@ -75,24 +75,25 @@
 - **상승장**: 기울기 > +2.5%
 - **하락장**: 기울기 < -2.5%
 
-### 4.2 진입 조건 (가격/RSI + 다이버전스)
+### 4.2 진입 조건 (가격/RSI + 스윙 피벗 다이버전스)
 
 **공통 (15분봉 RSI(12) 기준):**
-- 모든 추세장 진입은 **가격/RSI 조건**에 더해, 직전 봉 대비 **RSI 일반·히든 다이버전스**가 함께 나와야 합니다.  
-  - 일반 상승 다이버전스: 가격은 더 낮은데 RSI는 더 높음  
-  - 히든 상승 다이버전스: 가격은 더 높은데 RSI는 더 낮음 (추세 지속)  
-  - 일반 하락 다이버전스: 가격은 더 높은데 RSI는 더 낮음  
-  - 히든 하락 다이버전스: 가격은 더 낮은데 RSI는 더 높음 (추세 지속)
+- 모든 추세장 진입은 **가격/RSI 조건**에 더해, **스윙 고점/저점(pivot) 기반 다이버전스**가 필요합니다.  
+  - 5분봉 최근 구간에서 스윙 고점 2개·스윙 저점 2개를 찾고, 두 피벗 간 가격과 RSI를 비교.  
+  - 일반 상승: 저점2 가격 < 저점1, 저점2 RSI > 저점1  
+  - 히든 상승: 저점2 가격 > 저점1, 저점2 RSI < 저점1  
+  - 일반 하락: 고점2 가격 > 고점1, 고점2 RSI < 고점1  
+  - 히든 하락: 고점2 가격 < 고점1, 고점2 RSI > 고점1  
 
 **상승장:**
-- **롱**: `가격 ≤ MA20` + `RSI ≤ 42` (설정값) + (옵션) **RSI 상승 전환**(전봉 대비 RSI 상승) + **상승 다이버전스(일반/히든)**.  
-  (`config_common`: `TREND_UPTREND_LONG_RSI_MAX`, `TREND_UPTREND_LONG_ENABLED`, `TREND_UPTREND_LONG_REQUIRE_RSI_TURNUP`)
+- **롱**: `가격 ≤ MA20` + `RSI ≤ 42` (설정값) + **상승 다이버전스(일반/히든)**.  
+  (`config_common`: `TREND_UPTREND_LONG_RSI_MAX`, `TREND_UPTREND_LONG_ENABLED`)
 - **숏**: `가격 ≥ MA20` + `RSI ≥ 80` + **하락 다이버전스(일반/히든)**.
 
 **하락장:**
 - **롱**: `가격 ≤ MA20` + `RSI ≤ 20` + **상승 다이버전스(일반/히든)**.
-- **숏**: `가격 ≥ MA20` + `RSI ≥ 58` (설정값) + (옵션) **RSI 꺾임**(전봉 대비 RSI 하락) + **하락 다이버전스(일반/히든)**.  
-  (`config_common`: `TREND_DOWNTREND_SHORT_RSI_MIN`, `TREND_DOWNTREND_SHORT_ENABLED`, `TREND_DOWNTREND_SHORT_REQUIRE_RSI_TURNDOWN`)
+- **숏**: `가격 ≥ MA20` + `RSI ≥ 58` (설정값) + **하락 다이버전스(일반/히든)**.  
+  (`config_common`: `TREND_DOWNTREND_SHORT_RSI_MIN`, `TREND_DOWNTREND_SHORT_ENABLED`)
 
 ### 4.3 청산 조건
 
