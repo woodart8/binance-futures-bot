@@ -68,6 +68,17 @@ def _fetch_open_algo_orders(exchange, symbol: str) -> list:
     return []
 
 
+def _cancel_algo_order(exchange, algo_id: str) -> bool:
+    """바이낸스 선물 알고 주문 취소. DELETE /fapi/v1/algoOrder. 성공 시 True."""
+    if not algo_id or not hasattr(exchange, "request"):
+        return False
+    try:
+        exchange.request("algoOrder", "fapiPrivate", "DELETE", {"algoId": int(algo_id)})
+        return True
+    except Exception:
+        return False
+
+
 def _get_existing_tp_sl_order_ids(exchange, symbol: str) -> Tuple[str, str]:
     """거래소 미체결 주문에서 익절(limit reduceOnly)·손절(STOP_MARKET) 주문 ID 반환. openOrders + openAlgoOrders 확인. (익절_id, 손절_id)."""
     tp_id, sl_id = "", ""
@@ -286,7 +297,9 @@ def _log_exchange_tp_sl_close(exchange, state: Dict[str, Any], new_state: Dict[s
         },
     )
     new_state["consecutive_loss_count"] = (state.get("consecutive_loss_count") or 0) + 1 if pnl < 0 else 0
-    new_state["last_stop_loss_time"] = time.time()
+    # 손절(손실)일 때만 재진입 5분 차단. 익절이면 last_stop_loss_time 갱신 안 함
+    if pnl < 0:
+        new_state["last_stop_loss_time"] = time.time()
 
 
 # 바이낸스 선물 fetch_positions 반환 symbol이 "BTC/USDT" 또는 "BTC/USDT:USDT" 등으로 올 수 있음
@@ -438,7 +451,7 @@ def sync_state_from_exchange(exchange, state: Dict[str, Any]) -> Dict[str, Any]:
         log("[동기화] 거래소에 포지션 없음 — state를 포지션 없음으로 맞춤", "WARNING")
 
     # 현재 포지션이 전혀 없는 상태라면, 거래소에 남아 있는 SL 주문이 있더라도 모두 취소
-    # (수동 청산 등으로 포지션은 없는데 SL 주문만 남아 있는 상황 방지)
+    # (익절 등으로 포지션은 없는데 SL만 남은 경우: 일반 주문 취소 후 실패(-2011)면 알고 주문 취소 시도)
     if USE_EXCHANGE_TP_SL:
         try:
             _, existing_sl = _get_existing_tp_sl_order_ids(exchange, SYMBOL)
@@ -447,9 +460,14 @@ def sync_state_from_exchange(exchange, state: Dict[str, Any]) -> Dict[str, Any]:
                     exchange.cancel_order(existing_sl, SYMBOL)
                     log(f"[동기화] 포지션 없음 상태에서 잔여 SL 주문 취소 (order_id={existing_sl})")
                 except Exception as e:
-                    log(f"[동기화] 잔여 SL 주문 취소 실패: {e}", "WARNING")
+                    err_str = str(e).lower()
+                    if "-2011" in err_str or "unknown order" in err_str:
+                        # 일반 주문이 아님 → 알고 주문으로 취소 시도 (익절 후 SL 잔여 시)
+                        if _cancel_algo_order(exchange, existing_sl):
+                            log(f"[동기화] 포지션 없음 상태에서 잔여 SL(알고) 주문 취소 (algo_id={existing_sl})")
+                    else:
+                        log(f"[동기화] 잔여 SL 주문 취소 실패: {e}", "WARNING")
         except Exception:
-            # 조회 실패 시에는 그냥 넘어감 (기존 동작 유지)
             pass
 
     return new_state
